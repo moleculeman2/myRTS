@@ -6,7 +6,7 @@ import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.myrts.screens.MainMenuScreen;
 
-public class GameMain extends Game {
+public class GameBase extends Game {
     public SpriteBatch batch;
     public BitmapFont font;
     public AssetManager assets;
