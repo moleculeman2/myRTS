@@ -3,7 +3,6 @@ package com.myrts.map;
 import com.badlogic.ashley.core.Engine;
 import com.badlogic.ashley.core.Entity;
 import com.badlogic.gdx.graphics.OrthographicCamera;
-import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.maps.MapLayer;
 import com.badlogic.gdx.maps.MapObject;
 import com.badlogic.gdx.maps.MapObjects;
@@ -14,11 +13,14 @@ import com.badlogic.gdx.maps.tiled.TiledMapTileLayer;
 import com.badlogic.gdx.maps.tiled.TmxMapLoader;
 import com.badlogic.gdx.maps.tiled.renderers.OrthogonalTiledMapRenderer;
 import com.badlogic.gdx.math.Vector2;
-import com.myrts.components.CollisionComponent;
+import com.badlogic.gdx.utils.Array;
 import com.myrts.components.ResourceComponent;
 import com.myrts.components.TransformComponent;
+import org.poly2tri.Poly2Tri;
+import org.poly2tri.geometry.polygon.Polygon;
+import org.poly2tri.triangulation.delaunay.DelaunayTriangle;
 
-import java.util.Iterator;
+import java.util.List;
 
 public class MapManager {
 
@@ -30,6 +32,7 @@ public class MapManager {
     private int tileWidth;
     private int tileHeight;
     private boolean[][] collisionMap;
+    private Array<DelaunayTriangle> navMeshTriangles;
 
     public MapManager(String mapFilePath) {
         loadMap(mapFilePath);
@@ -50,8 +53,31 @@ public class MapManager {
         collisionMap = new boolean[mapWidth][mapHeight];
         initializeCollisionMap();
 
+        // After collision is ready, generate the NavMesh automatically
+        generateNavMesh();
+
         // Create renderer
         renderer = new OrthogonalTiledMapRenderer(map);
+    }
+
+    private void generateNavMesh() {
+        System.out.println("Tracing map contours...");
+        List<Polygon> polygonsToTriangulate = ContourTracer.trace(this);
+
+        System.out.println("Found " + polygonsToTriangulate.size() + " walkable areas. Triangulating...");
+        this.navMeshTriangles = new Array<>();
+
+        for (Polygon polygon : polygonsToTriangulate) {
+            Poly2Tri.triangulate(polygon);
+            for (DelaunayTriangle triangle : polygon.getTriangles()) {
+                navMeshTriangles.add(triangle);
+            }
+        }
+        System.out.println("Generated navmesh with " + navMeshTriangles.size + " triangles.");
+    }
+
+    public Array<DelaunayTriangle> getNavMeshTriangles() {
+        return navMeshTriangles;
     }
 
     private void initializeCollisionMap() {

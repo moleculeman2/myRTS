@@ -11,7 +11,6 @@ import com.myrts.GameBase;
 import com.myrts.input.RTSInputProcessor;
 import com.myrts.map.MapManager;
 import com.myrts.map.NavMeshRenderer;
-import com.myrts.map.Triangle;
 import com.myrts.systems.RenderSystem;
 import org.poly2tri.Poly2Tri;
 import org.poly2tri.geometry.polygon.Polygon;
@@ -30,7 +29,6 @@ public class GameScreen implements Screen {
     private Vector3 touchPos = new Vector3();
 
     private ShapeRenderer shapeRenderer;
-    private com.badlogic.gdx.utils.Array<Triangle> navMesh;
     private com.badlogic.gdx.utils.Array<DelaunayTriangle> navMeshTriangles;
     private NavMeshRenderer navMeshRenderer;
 
@@ -44,22 +42,6 @@ public class GameScreen implements Screen {
         shapeRenderer = new ShapeRenderer();
         // Load map
         mapManager = new MapManager("simplestmap2.tmx");
-        // ---  NAVMESH GENERATION ---
-        System.out.println("Tracing map contours...");
-        List<Polygon> polygonsToTriangulate = ContourTracer.trace(mapManager);
-
-        System.out.println("Found " + polygonsToTriangulate.size() + " walkable areas. Triangulating...");
-        this.navMeshTriangles = new com.badlogic.gdx.utils.Array<>();
-
-        for (Polygon polygon : polygonsToTriangulate) {
-            Poly2Tri.triangulate(polygon);
-            for (DelaunayTriangle triangle : polygon.getTriangles()) {
-                navMeshTriangles.add(triangle);
-            }
-        }
-
-        System.out.println("Generated navmesh with " + navMeshTriangles.size + " triangles.");
-        // --- END OF NEW NAVMESH GENERATION ---
 
         // Set up input handling
         inputProcessor = new RTSInputProcessor(camera, mapManager, engine);
@@ -98,8 +80,7 @@ public class GameScreen implements Screen {
         // Render map
         mapManager.render(camera);
         shapeRenderer.setProjectionMatrix(camera.combined);
-        NavMeshRenderer.drawDelaunay(shapeRenderer, navMeshTriangles);
-        game.batch.setProjectionMatrix(camera.combined);
+        NavMeshRenderer.drawDelaunay(shapeRenderer, mapManager.getNavMeshTriangles());        game.batch.setProjectionMatrix(camera.combined);
         // Update engine systems
         engine.update(delta);
 

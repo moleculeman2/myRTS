@@ -78,7 +78,7 @@ public class DelaunayTriangle
         }
         throw new RuntimeException("Calling index with a point that doesn't exist in triangle");
     }
-    
+
     public int indexCW( TriangulationPoint p )
     {
         int index = index(p);
@@ -100,7 +100,7 @@ public class DelaunayTriangle
             default: return 0;
         }
     }
-    
+
     public boolean contains( TriangulationPoint p )
     {
         return ( p == points[0] || p == points[1] || p == points[2] );
@@ -117,8 +117,8 @@ public class DelaunayTriangle
     }
 
     // Update neighbor pointers
-    private void markNeighbor( TriangulationPoint p1, 
-                               TriangulationPoint p2, 
+    private void markNeighbor( TriangulationPoint p1,
+                               TriangulationPoint p2,
                                DelaunayTriangle t )
     {
         if( ( p1 == points[2] && p2 == points[1] ) || ( p1 == points[1] && p2 == points[2] ) )
@@ -177,7 +177,7 @@ public class DelaunayTriangle
         }
         else if( neighbors[1] == triangle )
         {
-            neighbors[1] = null;            
+            neighbors[1] = null;
         }
         else
         {
@@ -203,7 +203,7 @@ public class DelaunayTriangle
         points[0]=points[1]=points[2]=null;
     }
     /**
-     * @param t - opposite triangle 
+     * @param t - opposite triangle
      * @param p - the point in t that isn't shared between the triangles
      * @return
      */
@@ -418,26 +418,26 @@ public class DelaunayTriangle
             }
         }
     }
-    
+
     public void markConstrainedEdge( int index )
     {
         cEdge[index] = true;
     }
-    
+
     public void markConstrainedEdge( DTSweepConstraint edge )
     {
         markConstrainedEdge( edge.p, edge.q );
-        if(   ( edge.q == points[0] && edge.p == points[1] ) 
+        if(   ( edge.q == points[0] && edge.p == points[1] )
            || ( edge.q == points[1] && edge.p == points[0] ) )
         {
             cEdge[2] = true;
         }
-        else if(   ( edge.q == points[0] && edge.p == points[2] ) 
+        else if(   ( edge.q == points[0] && edge.p == points[2] )
                 || ( edge.q == points[2] && edge.p == points[0] ) )
         {
             cEdge[1] = true;
         }
-        else if(   ( edge.q == points[1] && edge.p == points[2] ) 
+        else if(   ( edge.q == points[1] && edge.p == points[2] )
                 || ( edge.q == points[2] && edge.p == points[1] ) )
         {
             cEdge[0] = true;
@@ -478,8 +478,8 @@ public class DelaunayTriangle
 
     /**
      * Get the neighbor that share this edge
-     * 
-     * @param constrainedEdge
+     *
+     * @param p1, p2
      * @return index of the shared edge or -1 if edge isn't shared
      */
     public int edgeIndex( TriangulationPoint p1, TriangulationPoint p2 )
@@ -492,7 +492,7 @@ public class DelaunayTriangle
             }
             else if( points[2] == p2 )
             {
-                return 1;                
+                return 1;
             }
         }
         else if( points[1] == p1 )
@@ -503,7 +503,7 @@ public class DelaunayTriangle
             }
             else if( points[0] == p2 )
             {
-                return 2;                
+                return 2;
             }
         }
         else if( points[2] == p1 )
@@ -514,8 +514,8 @@ public class DelaunayTriangle
             }
             else if( points[1] == p2 )
             {
-                return 0;                
-            }            
+                return 0;
+            }
         }
         return -1;
     }
@@ -571,7 +571,7 @@ public class DelaunayTriangle
         }
         else
         {
-            cEdge[1] = ce;            
+            cEdge[1] = ce;
         }
     }
 
@@ -587,7 +587,7 @@ public class DelaunayTriangle
         }
         else
         {
-            cEdge[0] = ce;            
+            cEdge[0] = ce;
         }
     }
 
@@ -603,7 +603,7 @@ public class DelaunayTriangle
         }
         else
         {
-            cEdge[2] = ce;            
+            cEdge[2] = ce;
         }
     }
 
@@ -658,7 +658,7 @@ public class DelaunayTriangle
         }
         else
         {
-            dEdge[1] = e;            
+            dEdge[1] = e;
         }
     }
 
@@ -674,7 +674,7 @@ public class DelaunayTriangle
         }
         else
         {
-            dEdge[0] = e;            
+            dEdge[0] = e;
         }
     }
 
@@ -690,7 +690,7 @@ public class DelaunayTriangle
         }
         else
         {
-            dEdge[2] = e;            
+            dEdge[2] = e;
         }
     }
 
@@ -708,6 +708,6 @@ public class DelaunayTriangle
 
     public void isInterior( boolean b )
     {
-        interior = b;        
+        interior = b;
     }
 }
