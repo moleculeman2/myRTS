@@ -14,11 +14,19 @@ public class RTSInputProcessor extends InputAdapter {
     private OrthographicCamera camera;
     private MapManager mapManager;
     private Engine engine;
-    private Vector3 touchPos = new Vector3();
+
+    // Camera control variables
     private boolean panning = false;
-    private float startX, startY;
     private float lastX, lastY;
-    private Vector3 mousePos = new Vector3();
+
+    // Placement Mode variables
+    private boolean placingMode = false;
+    private boolean canBuild = false;
+    private Vector3 mouseWorldPos = new Vector3();
+    private Vector2 ghostPos = new Vector2(); // The bottom-left world position of the ghost
+
+    // Hardcoded building size for now (3x3)
+    private final int BUILDING_SIZE_TILES = 3;
 
     public RTSInputProcessor(OrthographicCamera camera, MapManager mapManager, Engine engine) {
         this.camera = camera;
@@ -27,35 +35,38 @@ public class RTSInputProcessor extends InputAdapter {
     }
 
     @Override
+    public boolean keyDown(int keycode) {
+        if (keycode == Input.Keys.B) {
+            placingMode = !placingMode; // Toggle mode
+            return true;
+        }
+        return false;
+    }
+
+    @Override
     public boolean touchDown(int screenX, int screenY, int pointer, int button) {
-        startX = screenX;
-        startY = screenY;
-        lastX = screenX;
-        lastY = screenY;
-
-        // Right mouse button for panning
-        if (button == 1) {
-            panning = true;
+        if (button == 1) { // Right click
+            if (placingMode) {
+                placingMode = false; // Right click cancels placement
+            } else {
+                panning = true;
+                lastX = screenX;
+                lastY = screenY;
+            }
             return true;
         }
 
-        // Left mouse button for selection
-        if (button == 0) {
-            // Convert screen coordinates to world coordinates
-            touchPos.set(screenX, screenY, 0);
-            camera.unproject(touchPos);
+        if (button == 0) { // Left click
+            if (placingMode) {
+                if (canBuild) {
+                    placeBuilding();
+                    placingMode = false; // Exit mode after placement (optional)
+                }
+                return true; // Consume input
+            }
 
-            // Check if we clicked on a tile
-            Vector2 tilePos = mapManager.worldToTile(touchPos.x, touchPos.y);
-            System.out.println("Clicked on tile: " + tilePos.x + ", " + tilePos.y);
-
-            // Check if this tile is blocked
-            boolean isBlocked = mapManager.isCollision((int)tilePos.x, (int)tilePos.y);
-            System.out.println("Tile is " + (isBlocked ? "blocked" : "passable"));
-
-            return true;
+            // Normal selection logic here (omitted for brevity)
         }
-
         return false;
     }
 
@@ -71,22 +82,12 @@ public class RTSInputProcessor extends InputAdapter {
     @Override
     public boolean touchDragged(int screenX, int screenY, int pointer) {
         if (panning) {
-            float deltaX = (screenX - lastX);
-            float deltaY = (lastY - screenY);
+            float deltaX = (screenX - lastX) * camera.zoom;
+            float deltaY = (lastY - screenY) * camera.zoom;
 
-            // Convert screen delta to world delta based on zoom
-            deltaX *= camera.zoom;
-            deltaY *= camera.zoom;
-
-            // Move camera
             camera.position.x -= deltaX;
             camera.position.y -= deltaY;
-
-            // Ensure camera position is aligned to pixels
-            camera.position.x = Math.round(camera.position.x);
-            camera.position.y = Math.round(camera.position.y);
-
-            // Rest of your camera bounding code...
+            camera.update();
 
             lastX = screenX;
             lastY = screenY;
@@ -97,54 +98,80 @@ public class RTSInputProcessor extends InputAdapter {
 
     @Override
     public boolean scrolled(float amountX, float amountY) {
-        // Zoom with scroll wheel
-        camera.position.x = Math.round(camera.position.x);
-        camera.position.y = Math.round(camera.position.y);
-        camera.zoom += amountY *0.1f;
-        System.out.println("1: " + camera.zoom);
-        // Limit zoom
+        camera.zoom += amountY * 0.1f;
         camera.zoom = Math.max(0.5f, Math.min(camera.zoom, 5f));
-
-        System.out.println("2: " +camera.zoom);
         camera.update();
         return true;
     }
 
-    @Override
-    public boolean keyDown(int keycode) {
-        if (keycode == Input.Keys.B) {
-            // Get the current mouse position in world coordinates
-            mousePos.set(Gdx.input.getX(), Gdx.input.getY(), 0);
-            camera.unproject(mousePos);
+    // Called every frame by GameScreen
+    public void update(float delta) {
+        if (placingMode) {
+            updatePlacementLogic();
+        }
+    }
 
-            // Convert world coordinates to tile coordinates
-            Vector2 tilePos = mapManager.worldToTile(mousePos.x, mousePos.y);
-            int tileX = (int) tilePos.x;
-            int tileY = (int) tilePos.y;
+    private void updatePlacementLogic() {
+        // 1. Get Mouse World Position
+        mouseWorldPos.set(Gdx.input.getX(), Gdx.input.getY(), 0);
+        camera.unproject(mouseWorldPos);
 
-            // --- Placement Logic ---
-            // Check if the tile is currently walkable (not blocked)
-            if (!mapManager.isCollision(tileX, tileY)) {
-                System.out.println("Placing building at tile: " + tileX + ", " + tileY);
+        float tileW = mapManager.getTileWidth();
+        float tileH = mapManager.getTileHeight();
+        float buildingWorldWidth = BUILDING_SIZE_TILES * tileW;
+        float buildingWorldHeight = BUILDING_SIZE_TILES * tileH;
 
-                // 1. Create the building entity
-                EntityFactory.createBuilding(engine, tilePos, mapManager.getTileWidth(), mapManager.getTileHeight());
+        // 2. Calculate Center-Aligned Position
+        // Subtract half dimensions to find the Bottom-Left corner relative to the mouse center
+        float rawX = mouseWorldPos.x - (buildingWorldWidth / 2f);
+        float rawY = mouseWorldPos.y - (buildingWorldHeight / 2f);
 
-                // 2. Mark the tile as blocked in the collision map
-                mapManager.setTileBlocked(tileX, tileY, true);
+        // 3. Snap to Grid
+        // Round to nearest tile index
+        int tileX = Math.round(rawX / tileW);
+        int tileY = Math.round(rawY / tileH);
 
-                // 3. (Future) Trigger the local navmesh update here!
+        // Calculate snapped world coordinates for rendering
+        ghostPos.set(tileX * tileW, tileY * tileH);
 
-                return true; // Input was handled
-            } else {
-                System.out.println("Cannot build at tile: " + tileX + ", " + tileY + ". It's blocked.");
-                return false;
+        // 4. Check Validity
+        canBuild = true;
+        for (int x = 0; x < BUILDING_SIZE_TILES; x++) {
+            for (int y = 0; y < BUILDING_SIZE_TILES; y++) {
+                if (mapManager.isCollision(tileX + x, tileY + y)) {
+                    canBuild = false;
+                    break;
+                }
             }
         }
-        return false;
     }
 
-    public void update(float delta) {
-        // Could add keyboard controls for camera movement here
+    private void placeBuilding() {
+        float tileW = mapManager.getTileWidth();
+        float tileH = mapManager.getTileHeight();
+        float buildingWorldWidth = BUILDING_SIZE_TILES * tileW;
+        float buildingWorldHeight = BUILDING_SIZE_TILES * tileH;
+
+        int tileX = (int) (ghostPos.x / tileW);
+        int tileY = (int) (ghostPos.y / tileH);
+
+        System.out.println("Placing building at world: " + ghostPos.x + ", " + ghostPos.y);
+
+        // Create Entity
+        EntityFactory.createBuilding(engine, ghostPos.x, ghostPos.y, buildingWorldWidth, buildingWorldHeight);
+
+        // Update Collision
+        for (int x = 0; x < BUILDING_SIZE_TILES; x++) {
+            for (int y = 0; y < BUILDING_SIZE_TILES; y++) {
+                mapManager.setTileBlocked(tileX + x, tileY + y, true);
+            }
+        }
     }
+
+    // Getters for GameScreen rendering
+    public boolean isPlacingMode() { return placingMode; }
+    public boolean isCanBuild() { return canBuild; }
+    public Vector2 getGhostPos() { return ghostPos; }
+    public float getGhostWidth() { return BUILDING_SIZE_TILES * mapManager.getTileWidth(); }
+    public float getGhostHeight() { return BUILDING_SIZE_TILES * mapManager.getTileHeight(); }
 }
