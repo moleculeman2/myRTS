@@ -1,6 +1,7 @@
 package com.myrts.map;
 
 import com.badlogic.gdx.math.Vector2;
+import com.badlogic.gdx.utils.Array;
 import org.poly2tri.geometry.polygon.Polygon;
 import org.poly2tri.geometry.polygon.PolygonPoint;
 
@@ -15,10 +16,10 @@ public class ContourTracer {
 
     // A simple class to represent a vertex point using integer grid coordinates.
     // We override equals() and hashCode() so it can be used as a key in a Map.
-    private static class Point {
+    public static class Point {
         double x, y;
 
-        Point(int x, int y) {
+        Point(double  x, double y) {
             this.x = x;
             this.y = y;
         }
@@ -69,6 +70,34 @@ public class ContourTracer {
         @Override
         public int hashCode() {
             return p1.hashCode() + p2.hashCode();
+        }
+    }
+
+    // A proper edge class that treats Edge(A,B) and Edge(B,A) as identical
+    private static class UndirectedEdge {
+        Vector2 v1, v2;
+
+        UndirectedEdge(Vector2 v1, Vector2 v2) {
+            // Sort by hashcode so direction doesn't matter for equals()
+            if (v1.hashCode() < v2.hashCode()) {
+                this.v1 = v1; this.v2 = v2;
+            } else {
+                this.v1 = v2; this.v2 = v1;
+            }
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof UndirectedEdge)) return false;
+            UndirectedEdge edge = (UndirectedEdge) o;
+            // == is safe here ONLY because we unify Vector2 references first!
+            return v1 == edge.v1 && v2 == edge.v2;
+        }
+
+        @Override
+        public int hashCode() {
+            return v1.hashCode() ^ v2.hashCode();
         }
     }
 
@@ -200,6 +229,100 @@ public class ContourTracer {
             // The last point is a duplicate of the start, remove it.
             path.remove(path.size() - 1);
             polygons.add(path);
+        }
+        return polygons;
+    }
+
+    /**
+     * Takes a set of unordered boundary edges and connects them into ordered polygon loops.
+     */
+    public static List<List<Point>> assemblePolygons(Array<Vector2[]> boundaryEdges) {
+        List<List<Point>> polygons = new ArrayList<>();
+        if (boundaryEdges == null || boundaryEdges.size == 0) return polygons;
+
+        // 1. UNIFY VERTICES to fix floating-point drift!
+        float EPSILON = 0.5f; // Tolerance (half a pixel/unit)
+        List<Vector2> uniqueVertices = new ArrayList<>();
+
+        for (Vector2[] bEdge : boundaryEdges) {
+            for (int i = 0; i < 2; i++) {
+                boolean found = false;
+                for (Vector2 unique : uniqueVertices) {
+                    if (unique.dst(bEdge[i]) < EPSILON) {
+                        bEdge[i] = unique; // Snap to the unified reference
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    uniqueVertices.add(bEdge[i]);
+                }
+            }
+        }
+
+        // 2. Build Adjacency Map (Now flawlessly stable because references are unified)
+        Map<Vector2, List<UndirectedEdge>> edgeMap = new HashMap<>();
+        Set<UndirectedEdge> edges = new HashSet<>();
+
+        for (Vector2[] bEdge : boundaryEdges) {
+            UndirectedEdge e = new UndirectedEdge(bEdge[0], bEdge[1]);
+
+            // THE FIX: If the edge is already in the set, it means two triangles shared it.
+            // Therefore, it's an internal edge. Cancel it out!
+            if (edges.contains(e)) {
+                edges.remove(e);
+            } else {
+                edges.add(e);
+            }
+        }
+
+        // Build the map only from the surviving, true outer boundary edges
+        for (UndirectedEdge e : edges) {
+            edgeMap.computeIfAbsent(e.v1, k -> new ArrayList<>()).add(e);
+            edgeMap.computeIfAbsent(e.v2, k -> new ArrayList<>()).add(e);
+        }
+
+        // 3. Assemble the Loops
+        while (!edges.isEmpty()) {
+            List<Point> path = new ArrayList<>();
+            UndirectedEdge startEdge = edges.iterator().next();
+            edges.remove(startEdge);
+
+            Vector2 startPoint = startEdge.v1;
+            Vector2 currentPoint = startEdge.v2;
+
+            path.add(new Point(startPoint.x, startPoint.y));
+            path.add(new Point(currentPoint.x, currentPoint.y));
+
+            // We can safely use != because we unified the Object references in Step 1
+            while (currentPoint != startPoint) {
+                UndirectedEdge nextEdge = null;
+                for (UndirectedEdge candidate : edgeMap.get(currentPoint)) {
+                    if (edges.contains(candidate)) {
+                        nextEdge = candidate;
+                        break;
+                    }
+                }
+
+                if (nextEdge == null) {
+                    System.err.println("Warning: Open loop detected! Skipping broken cavity piece.");
+                    break; // Gracefully handle instead of infinite looping
+                }
+
+                edges.remove(nextEdge);
+                currentPoint = (nextEdge.v1 == currentPoint) ? nextEdge.v2 : nextEdge.v1;
+                path.add(new Point(currentPoint.x, currentPoint.y));
+            }
+
+            // Remove the closing duplicate point if loop completed successfully
+            if (path.size() > 2 && path.get(path.size() - 1).x == path.get(0).x && path.get(path.size() - 1).y == path.get(0).y) {
+                path.remove(path.size() - 1);
+            }
+
+            // ONLY pass valid, completely closed polygons down the line
+            if (path.size() >= 3) {
+                polygons.add(path);
+            }
         }
         return polygons;
     }

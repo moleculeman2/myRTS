@@ -18,7 +18,10 @@ import com.myrts.components.ResourceComponent;
 import com.myrts.components.TransformComponent;
 import org.poly2tri.Poly2Tri;
 import org.poly2tri.geometry.polygon.Polygon;
+import org.poly2tri.triangulation.TriangulationPoint;
 import org.poly2tri.triangulation.delaunay.DelaunayTriangle;
+import com.badlogic.gdx.math.Intersector;
+//import com.badlogic.gdx.math.Polygon;
 
 import java.util.List;
 
@@ -100,6 +103,136 @@ public class MapManager {
                 }
             }
         }
+    }
+
+    /**
+     * Finds and removes any navmesh triangles that intersect with the given bounding box.
+     * @return An Array of the removed DelaunayTriangles.
+     */
+    public Array<DelaunayTriangle> removeIntersectingTriangles(float x, float y, float width, float height) {
+        // 1. Create a LibGDX Polygon for the building's bounding box
+        float[] rectVertices = new float[] {
+            x, y,
+            x + width, y,
+            x + width, y + height,
+            x, y + height
+        };
+        com.badlogic.gdx.math.Polygon buildingPoly = new com.badlogic.gdx.math.Polygon(rectVertices);
+
+        Array<DelaunayTriangle> removedTriangles = new Array<>();
+        Array<DelaunayTriangle> survivingTriangles = new Array<>();
+
+        // 2. Check each triangle for an intersection
+        for (DelaunayTriangle tri : navMeshTriangles) {
+            // Convert Poly2Tri triangle to a LibGDX Polygon for the Intersector
+            float[] triVertices = new float[] {
+                tri.points[0].getXf(), tri.points[0].getYf(),
+                tri.points[1].getXf(), tri.points[1].getYf(),
+                tri.points[2].getXf(), tri.points[2].getYf()
+            };
+            com.badlogic.gdx.math.Polygon triPoly = new com.badlogic.gdx.math.Polygon(triVertices);
+
+            // overlapConvexPolygons perfectly checks if two convex shapes intersect
+            if (Intersector.overlapConvexPolygons(buildingPoly, triPoly)) {
+                removedTriangles.add(tri);
+            } else {
+                survivingTriangles.add(tri);
+            }
+        }
+
+        // 3. Update the map's active navmesh list to only include the survivors
+        this.navMeshTriangles = survivingTriangles;
+
+        System.out.println("Removed " + removedTriangles.size + " triangles. " + survivingTriangles.size + " remain.");
+
+        return removedTriangles;
+    }
+
+    /**
+     * Finds the outer perimeter edges of a group of triangles.
+     * Also disconnects these triangles from the surviving navmesh graph.
+     */
+    public Array<Vector2[]> extractPerimeterEdges(Array<DelaunayTriangle> removedTriangles) {
+        Array<Vector2[]> boundaryEdges = new Array<>();
+
+        for (DelaunayTriangle tri : removedTriangles) {
+            // Poly2Tri triangles always have exactly 3 neighbors (some might be null)
+            for (int i = 0; i < 3; i++) {
+                DelaunayTriangle neighbor = tri.neighbors[i];
+
+                // Is this an outer boundary edge?
+                if (neighbor == null || !removedTriangles.contains(neighbor, true)) {
+
+                    // Poly2Tri convention: neighbor[i] is OPPOSITE to point[i].
+                    // So the edge touching the neighbor is formed by the *other* two points.
+                    TriangulationPoint p1 = tri.points[(i + 1) % 3];
+                    TriangulationPoint p2 = tri.points[(i + 2) % 3];
+
+                    // Convert to LibGDX vectors (or whatever ContourTracer expects)
+                    Vector2 v1 = new Vector2(p1.getXf(), p1.getYf());
+                    Vector2 v2 = new Vector2(p2.getXf(), p2.getYf());
+
+                    boundaryEdges.add(new Vector2[]{v1, v2});
+
+                    // VERY IMPORTANT: Disconnect the surviving neighbor from this doomed triangle!
+                    // This physically creates the "hole" in your pathfinding graph.
+                    if (neighbor != null) {
+                        neighbor.clearNeighbor(tri);
+                    }
+                }
+            }
+        }
+
+        System.out.println("Extracted " + boundaryEdges.size + " boundary edges.");
+        return boundaryEdges;
+    }
+
+    /**
+     * Reconnects the newly generated triangles to the surviving navmesh graph.
+     */
+    public void stitchNewTriangles(Array<DelaunayTriangle> newTriangles) {
+        float epsilon = 0.1f; // Tolerance for floating point inaccuracy
+
+        for (DelaunayTriangle newTri : newTriangles) {
+            for (int i = 0; i < 3; i++) {
+                // If this edge doesn't have a neighbor, it's on the outer boundary
+                if (newTri.neighbors[i] == null) {
+                    float nx1 = newTri.points[(i + 1) % 3].getXf();
+                    float ny1 = newTri.points[(i + 1) % 3].getYf();
+                    float nx2 = newTri.points[(i + 2) % 3].getXf();
+                    float ny2 = newTri.points[(i + 2) % 3].getYf();
+
+                    // Search the active navmesh for the matching surviving edge
+                    for (DelaunayTriangle oldTri : navMeshTriangles) {
+                        // Skip if it's one of the other new triangles
+                        if (newTriangles.contains(oldTri, true)) continue;
+
+                        for (int j = 0; j < 3; j++) {
+                            if (oldTri.neighbors[j] == null) {
+                                float ox1 = oldTri.points[(j + 1) % 3].getXf();
+                                float oy1 = oldTri.points[(j + 1) % 3].getYf();
+                                float ox2 = oldTri.points[(j + 2) % 3].getXf();
+                                float oy2 = oldTri.points[(j + 2) % 3].getYf();
+
+                                // Check if the points match (in either direction)
+                                boolean match1 = (Math.abs(nx1 - ox2) < epsilon && Math.abs(ny1 - oy2) < epsilon) &&
+                                    (Math.abs(nx2 - ox1) < epsilon && Math.abs(ny2 - oy1) < epsilon);
+                                boolean match2 = (Math.abs(nx1 - ox1) < epsilon && Math.abs(ny1 - oy1) < epsilon) &&
+                                    (Math.abs(nx2 - ox2) < epsilon && Math.abs(ny2 - oy2) < epsilon);
+
+                                if (match1 || match2) {
+                                    // STITCH!
+                                    newTri.neighbors[i] = oldTri;
+                                    oldTri.neighbors[j] = newTri;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        System.out.println("Finished stitching new triangles to existing navmesh.");
     }
 
     public void createEntitiesFromMap(Engine engine) {

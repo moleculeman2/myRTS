@@ -7,8 +7,16 @@ import com.badlogic.gdx.InputAdapter;
 import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.math.Vector3;
+import com.badlogic.gdx.utils.Array;
 import com.myrts.entities.EntityFactory;
+import com.myrts.map.ContourTracer;
 import com.myrts.map.MapManager;
+import com.myrts.map.NavMeshClipper;
+import org.poly2tri.Poly2Tri;
+import org.poly2tri.geometry.polygon.Polygon;
+import org.poly2tri.triangulation.delaunay.DelaunayTriangle;
+
+import java.util.List;
 
 public class RTSInputProcessor extends InputAdapter {
     private OrthographicCamera camera;
@@ -165,6 +173,45 @@ public class RTSInputProcessor extends InputAdapter {
             for (int y = 0; y < BUILDING_SIZE_TILES; y++) {
                 mapManager.setTileBlocked(tileX + x, tileY + y, true);
             }
+        }
+
+        //Cut the hole in the NavMesh
+        Array<DelaunayTriangle> removed = mapManager.removeIntersectingTriangles(
+            ghostPos.x, ghostPos.y, buildingWorldWidth, buildingWorldHeight
+        );
+
+        // 2. Extract the unordered perimeter edges
+        Array<Vector2[]> boundaryEdges = mapManager.extractPerimeterEdges(removed);
+        // 3. Let ContourTracer stitch them into an ordered polygon
+        // Note: Adjust the parameter type if assemblePolygons expects something specific like Array<Edge>
+        List<List<ContourTracer.Point>> polygons = ContourTracer.assemblePolygons(boundaryEdges);
+
+        if (polygons.size()> 0) {
+            System.out.println("Successfully assembled " + polygons.size() + " perimeter polygons!");
+            // We will feed polygons.get(0) to Poly2Tri in the next step
+        }
+
+        // 4. Subtract building and Triangulate!
+        for (List<ContourTracer.Point> cavityPath : polygons) {
+
+            List<Polygon> p2tPolygons = NavMeshClipper.subtractBuilding(
+                cavityPath, ghostPos.x, ghostPos.y, buildingWorldWidth, buildingWorldHeight
+            );
+
+            Array<DelaunayTriangle> freshlyGeneratedTriangles = new Array<>();
+
+            for (Polygon polyToTriangulate : p2tPolygons) {
+                Poly2Tri.triangulate(polyToTriangulate);
+
+                // Collect the new triangles
+                for (DelaunayTriangle tri : polyToTriangulate.getTriangles()) {
+                    freshlyGeneratedTriangles.add(tri);
+                    mapManager.getNavMeshTriangles().add(tri); // Add to main map list
+                }
+            }
+
+            // --- NEW: Stitch the graph back together! ---
+            mapManager.stitchNewTriangles(freshlyGeneratedTriangles);
         }
     }
 
