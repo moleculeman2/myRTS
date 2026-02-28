@@ -2,6 +2,7 @@ package com.myrts.map;
 
 import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.utils.Array;
+import com.badlogic.gdx.utils.IntArray;
 import org.poly2tri.geometry.polygon.Polygon;
 import org.poly2tri.geometry.polygon.PolygonPoint;
 
@@ -146,19 +147,25 @@ public class ContourTracer {
      */
     private static Set<Edge> extractBoundaryEdges(MapManager mapManager, boolean[][] visited, int startX, int startY) {
         Set<Edge> edges = new HashSet<>();
-        Queue<Vector2> queue = new LinkedList<>();
 
-        queue.add(new Vector2(startX, startY));
+        // 1. Use LibGDX's primitive array. No object overhead!
+        IntArray stack = new IntArray();
+
+        // 2. Pack the starting X and Y into a single integer
+        // We shift X to the left by 16 bits, and merge it with Y using bitwise OR.
+        stack.add((startX << 16) | (startY & 0xFFFF));
         visited[startX][startY] = true;
 
-        while (!queue.isEmpty()) {
-            Vector2 current = queue.poll();
-            int cx = (int) current.x;
-            int cy = (int) current.y;
+        int[] dx = {0, 1, 0, -1}; // Top, Right, Bottom, Left
+        int[] dy = {1, 0, -1, 0};
 
-            // Check all 4 neighbors
-            int[] dx = {0, 1, 0, -1}; // Corresponds to Top, Right, Bottom, Left edges
-            int[] dy = {1, 0, -1, 0};
+        while (stack.size > 0) {
+            // 3. Pop from the end of the array (O(1) speed, Depth-First Search)
+            int current = stack.pop();
+
+            // 4. Unpack the integer back into X and Y coordinates
+            int cx = current >>> 16;           // Shift right to get X
+            int cy = current & 0xFFFF;         // Mask to get Y
 
             for (int i = 0; i < 4; i++) {
                 int nx = cx + dx[i];
@@ -166,7 +173,6 @@ public class ContourTracer {
 
                 if (mapManager.isCollision(nx, ny)) {
                     // This neighbor is a wall, so we found a boundary edge.
-                    // The vertices of a tile (cx,cy) are (cx,cy), (cx+1,cy), (cx+1,cy+1), (cx,cy+1)
                     Point p1, p2;
                     if (i == 0) { // Top edge
                         p1 = new Point(cx, cy + 1); p2 = new Point(cx + 1, cy + 1);
@@ -180,7 +186,8 @@ public class ContourTracer {
                     edges.add(new Edge(p1, p2));
                 } else if (!visited[nx][ny]) {
                     visited[nx][ny] = true;
-                    queue.add(new Vector2(nx, ny));
+                    // Pack and push the new tile
+                    stack.add((nx << 16) | (ny & 0xFFFF));
                 }
             }
         }

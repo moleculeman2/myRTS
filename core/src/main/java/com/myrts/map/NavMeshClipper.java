@@ -15,6 +15,14 @@ public class NavMeshClipper {
 
     private static final GeometryFactory geoFactory = new GeometryFactory();
 
+    private static final Coordinate[] reusableBuildingCoords = new Coordinate[] {
+        new Coordinate(),
+        new Coordinate(),
+        new Coordinate(),
+        new Coordinate(),
+        new Coordinate()
+    };
+
     /**
      * Subtracts the building footprint from the navmesh cavity and returns
      * Poly2Tri polygons ready for triangulation.
@@ -41,18 +49,25 @@ public class NavMeshClipper {
         // --- NEW: The JTS Geometry Healer ---
         // Calling buffer(0) forces JTS to resolve any self-intersections
         // or duplicate segments before doing the difference math.
-        Geometry validCavity = cavityPoly.buffer(0);
+        //Geometry validCavity = cavityPoly.buffer(0);
 
-        // 2. Create the Building Footprint (Rectangle) Coordinates
-        Coordinate[] buildingCoords = new Coordinate[] {
-            new Coordinate(bX, bY),
-            new Coordinate(bX + bW, bY),
-            new Coordinate(bX + bW, bY + bH),
-            new Coordinate(bX, bY + bH),
-            new Coordinate(bX, bY) // Close the loop
-        };
+        // 2. REUSE the pre-allocated building array by mutating the values directly
+        reusableBuildingCoords[0].x = bX;
+        reusableBuildingCoords[0].y = bY;
 
-        Polygon buildingPoly = geoFactory.createPolygon(buildingCoords);
+        reusableBuildingCoords[1].x = bX + bW;
+        reusableBuildingCoords[1].y = bY;
+
+        reusableBuildingCoords[2].x = bX + bW;
+        reusableBuildingCoords[2].y = bY + bH;
+
+        reusableBuildingCoords[3].x = bX;
+        reusableBuildingCoords[3].y = bY + bH;
+
+        reusableBuildingCoords[4].x = bX;
+        reusableBuildingCoords[4].y = bY;
+
+        Polygon buildingPoly = geoFactory.createPolygon(reusableBuildingCoords);
 
         // 3. THE MATH: Subtract the building from the cavity!
         Geometry result = cavityPoly.difference(buildingPoly);

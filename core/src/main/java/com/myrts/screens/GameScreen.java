@@ -34,7 +34,7 @@ public class GameScreen implements Screen {
         camera.setToOrtho(false, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
 
         shapeRenderer = new ShapeRenderer();
-        mapManager = new MapManager("simplestmap2.tmx");
+        mapManager = new MapManager("smallmap.tmx");
 
         inputProcessor = new RTSInputProcessor(camera, mapManager, engine);
         Gdx.input.setInputProcessor(inputProcessor);
@@ -89,7 +89,9 @@ public class GameScreen implements Screen {
 
         // Render Debug/NavMesh (Optional)
         shapeRenderer.setProjectionMatrix(camera.combined);
+        shapeRenderer.begin(ShapeRenderer.ShapeType.Line);
         NavMeshRenderer.drawDelaunay(shapeRenderer, mapManager.getNavMeshTriangles());
+        shapeRenderer.end();
     }
 
     @Override

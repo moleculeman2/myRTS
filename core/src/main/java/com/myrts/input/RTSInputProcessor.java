@@ -179,9 +179,10 @@ public class RTSInputProcessor extends InputAdapter {
         Array<DelaunayTriangle> removed = mapManager.removeIntersectingTriangles(
             ghostPos.x, ghostPos.y, buildingWorldWidth, buildingWorldHeight
         );
-
+        // 2. Create an EMPTY list right here in the caller method
+        Array<DelaunayTriangle> survivingBorderTriangles = new Array<>();
         // 2. Extract the unordered perimeter edges
-        Array<Vector2[]> boundaryEdges = mapManager.extractPerimeterEdges(removed);
+        Array<Vector2[]> boundaryEdges = mapManager.extractPerimeterEdges(removed,survivingBorderTriangles);
         // 3. Let ContourTracer stitch them into an ordered polygon
         // Note: Adjust the parameter type if assemblePolygons expects something specific like Array<Edge>
         List<List<ContourTracer.Point>> polygons = ContourTracer.assemblePolygons(boundaryEdges);
@@ -211,7 +212,7 @@ public class RTSInputProcessor extends InputAdapter {
             }
 
             // --- NEW: Stitch the graph back together! ---
-            mapManager.stitchNewTriangles(freshlyGeneratedTriangles);
+            mapManager.stitchNewTriangles(freshlyGeneratedTriangles, survivingBorderTriangles);
         }
     }
 
