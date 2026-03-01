@@ -1,11 +1,7 @@
 package com.myrts.map;
 
-import org.locationtech.jts.geom.Coordinate;
-import org.locationtech.jts.geom.Geometry;
-import org.locationtech.jts.geom.GeometryFactory;
-import org.locationtech.jts.geom.Polygon;
-import org.locationtech.jts.geom.MultiPolygon;
-import org.locationtech.jts.geom.LineString;
+import org.locationtech.jts.geom.*;
+import org.locationtech.jts.precision.GeometryPrecisionReducer;
 import org.poly2tri.geometry.polygon.PolygonPoint;
 
 import java.util.ArrayList;
@@ -14,6 +10,8 @@ import java.util.List;
 public class NavMeshClipper {
 
     private static final GeometryFactory geoFactory = new GeometryFactory();
+    private static final PrecisionModel precisionModel = new PrecisionModel(10.0);
+    private static final GeometryPrecisionReducer precisionReducer = new GeometryPrecisionReducer(precisionModel);
 
     private static final Coordinate[] reusableBuildingCoords = new Coordinate[] {
         new Coordinate(),
@@ -49,7 +47,7 @@ public class NavMeshClipper {
         // --- NEW: The JTS Geometry Healer ---
         // Calling buffer(0) forces JTS to resolve any self-intersections
         // or duplicate segments before doing the difference math.
-        //Geometry validCavity = cavityPoly.buffer(0);
+
 
         // 2. REUSE the pre-allocated building array by mutating the values directly
         reusableBuildingCoords[0].x = bX;
@@ -69,8 +67,15 @@ public class NavMeshClipper {
 
         Polygon buildingPoly = geoFactory.createPolygon(reusableBuildingCoords);
 
+        Geometry healedRawCavity = cavityPoly.buffer(0);
+
+        Geometry snappedCavity = precisionReducer.reduce(healedRawCavity);
+        Geometry snappedBuilding = precisionReducer.reduce(buildingPoly);
+
+        Geometry validCavity = snappedCavity.buffer(0);
+        Geometry validBuilding = snappedBuilding.buffer(0);
         // 3. THE MATH: Subtract the building from the cavity!
-        Geometry result = cavityPoly.difference(buildingPoly);
+        Geometry result = validCavity.difference(validBuilding);
 
         if (result.isEmpty()) {
             System.out.println("Building completely filled the cavity. No navmesh left to generate.");

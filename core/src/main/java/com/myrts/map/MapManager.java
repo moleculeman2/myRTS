@@ -27,7 +27,6 @@ import java.util.List;
 
 public class MapManager {
 
-
     private TiledMap map;
     private TiledMapRenderer renderer;
     private int mapWidth;
@@ -110,24 +109,37 @@ public class MapManager {
      * @return An Array of the removed DelaunayTriangles.
      */
     public Array<DelaunayTriangle> removeIntersectingTriangles(float x, float y, float width, float height) {
-        // 1. Create a LibGDX Polygon for the building's bounding box
-        float[] rectVertices = new float[] {
+        float inset = 0.1f;
+
+        // 1. Full-sized Polygon (Large Search)
+        float[] fullVertices = new float[] {
             x, y,
             x + width, y,
             x + width, y + height,
             x, y + height
         };
-        com.badlogic.gdx.math.Polygon buildingPoly = new com.badlogic.gdx.math.Polygon(rectVertices);
+        com.badlogic.gdx.math.Polygon fullPoly = new com.badlogic.gdx.math.Polygon(fullVertices);
+
+        // 2. Inset Polygon (Small Search)
+        float[] insetVertices = new float[] {
+            x + inset, y + inset,
+            x + width - inset, y + inset,
+            x + width - inset, y + height - inset,
+            x + inset, y + height - inset
+        };
+        com.badlogic.gdx.math.Polygon insetPoly = new com.badlogic.gdx.math.Polygon(insetVertices);
 
         Array<DelaunayTriangle> removedTriangles = new Array<>();
         Array<DelaunayTriangle> survivingTriangles = new Array<>();
 
+        Array<DelaunayTriangle> smallSearchSet = new Array<>();
+        Array<DelaunayTriangle> borderCandidates = new Array<>();
+
         float[] triVertices = new float[6];
         com.badlogic.gdx.math.Polygon triPoly = new com.badlogic.gdx.math.Polygon(triVertices);
 
-        // 2. Check each triangle for an intersection
+        // 3. First Pass: Categorize all triangles geometrically
         for (DelaunayTriangle tri : navMeshTriangles) {
-            // Convert Poly2Tri triangle to a LibGDX Polygon for the Intersector
             triVertices[0] = tri.points[0].getXf();
             triVertices[1] = tri.points[0].getYf();
             triVertices[2] = tri.points[1].getXf();
@@ -135,15 +147,44 @@ public class MapManager {
             triVertices[4] = tri.points[2].getXf();
             triVertices[5] = tri.points[2].getYf();
             triPoly.setVertices(triVertices);
-            // overlapConvexPolygons perfectly checks if two convex shapes intersect
-            if (Intersector.overlapConvexPolygons(buildingPoly, triPoly)) {
+
+            if (Intersector.overlapConvexPolygons(insetPoly, triPoly)) {
+                // Strictly inside/overlapping (Small Search)
+                smallSearchSet.add(tri);
                 removedTriangles.add(tri);
+            } else if (Intersector.overlapConvexPolygons(fullPoly, triPoly)) {
+                // Touching the outer border (Could be parallel edge OR armpit vertex)
+                borderCandidates.add(tri);
             } else {
+                // Completely outside and safe
                 survivingTriangles.add(tri);
             }
         }
 
-        // 3. Update the map's active navmesh list to only include the survivors
+        // 4. Second Pass: Filter the border candidates topologically!
+        for (DelaunayTriangle candidate : borderCandidates) {
+            boolean sharesEdgeWithInterior = false;
+
+            // Check if this candidate shares a mathematical edge with ANY triangle in the small search set
+            for (int i = 0; i < 3; i++) {
+                DelaunayTriangle neighbor = candidate.neighbors[i];
+                // 'true' uses identity (==) check for speed since these are the exact same instances in memory
+                if (neighbor != null && smallSearchSet.contains(neighbor, true)) {
+                    sharesEdgeWithInterior = true;
+                    break;
+                }
+            }
+
+            if (sharesEdgeWithInterior) {
+                // It shares an edge! It's a parallel-edge triangle, so we must re-triangulate it.
+                removedTriangles.add(candidate);
+            } else {
+                // It's an armpit triangle (only shares a vertex) or a false positive. Keep it!
+                survivingTriangles.add(candidate);
+            }
+        }
+
+        // 5. Update the map's active navmesh list
         this.navMeshTriangles = survivingTriangles;
 
         System.out.println("Removed " + removedTriangles.size + " triangles. " + survivingTriangles.size + " remain.");
