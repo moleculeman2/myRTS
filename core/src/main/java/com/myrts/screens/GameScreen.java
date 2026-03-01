@@ -7,13 +7,11 @@ import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
-import com.badlogic.gdx.math.Vector3;
 import com.myrts.GameBase;
-import com.myrts.input.RTSInputProcessor;
+import com.myrts.input.InputProcessor;
 import com.myrts.map.MapManager;
 import com.myrts.map.NavMeshRenderer;
 import com.myrts.systems.RenderSystem;
-import org.poly2tri.triangulation.delaunay.DelaunayTriangle;
 import com.myrts.entities.EntityFactory;
 
 public class GameScreen implements Screen {
@@ -21,7 +19,7 @@ public class GameScreen implements Screen {
     private Engine engine;
     private OrthographicCamera camera;
     private MapManager mapManager;
-    private RTSInputProcessor inputProcessor;
+    private InputProcessor inputProcessor;
 
     private ShapeRenderer shapeRenderer;
 
@@ -36,7 +34,7 @@ public class GameScreen implements Screen {
         shapeRenderer = new ShapeRenderer();
         mapManager = new MapManager("smallmap.tmx");
 
-        inputProcessor = new RTSInputProcessor(camera, mapManager, engine);
+        inputProcessor = new InputProcessor(camera, mapManager, engine);
         Gdx.input.setInputProcessor(inputProcessor);
 
         initializeSystems();

@@ -231,6 +231,70 @@ public class MapManager {
         System.out.println("Finished stitching new triangles to existing navmesh.");
     }
 
+    /**
+     * Checks if a building of a specific tile dimension can be placed at the target tile coordinates.
+     */
+    public boolean canPlaceBuilding(int tileX, int tileY, int widthTiles, int heightTiles) {
+        for (int x = 0; x < widthTiles; x++) {
+            for (int y = 0; y < heightTiles; y++) {
+                if (isCollision(tileX + x, tileY + y)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Registers a new building obstacle, updating the collision grid and re-baking the local NavMesh.
+     */
+    public void registerBuildingObstacle(float worldX, float worldY, float worldWidth, float worldHeight, int tilesW, int tilesH) {
+        // 1. Update Tile Collision Map
+        int startTileX = (int) (worldX / getTileWidth());
+        int startTileY = (int) (worldY / getTileHeight());
+
+        for (int x = 0; x < tilesW; x++) {
+            for (int y = 0; y < tilesH; y++) {
+                setTileBlocked(startTileX + x, startTileY + y, true);
+            }
+        }
+
+        // 2. Cut the hole in the NavMesh
+        Array<DelaunayTriangle> removed = removeIntersectingTriangles(worldX, worldY, worldWidth, worldHeight);
+
+        Array<DelaunayTriangle> survivingBorderTriangles = new Array<>();
+        Array<Vector2[]> boundaryEdges = extractPerimeterEdges(removed, survivingBorderTriangles);
+
+        // 3. Let ContourTracer stitch them into an ordered polygon
+        List<List<ContourTracer.Point>> polygons = ContourTracer.assemblePolygons(boundaryEdges);
+
+        if (polygons.size() > 0) {
+            System.out.println("Successfully assembled " + polygons.size() + " perimeter polygons!");
+        }
+
+        // 4. Subtract building and Triangulate
+        for (List<ContourTracer.Point> cavityPath : polygons) {
+            List<Polygon> p2tPolygons = NavMeshClipper.subtractBuilding(
+                cavityPath, worldX, worldY, worldWidth, worldHeight
+            );
+
+            Array<DelaunayTriangle> freshlyGeneratedTriangles = new Array<>();
+
+            for (Polygon polyToTriangulate : p2tPolygons) {
+                Poly2Tri.triangulate(polyToTriangulate);
+
+                // Collect the new triangles
+                for (DelaunayTriangle tri : polyToTriangulate.getTriangles()) {
+                    freshlyGeneratedTriangles.add(tri);
+                    getNavMeshTriangles().add(tri); // Add to main map list
+                }
+            }
+
+            // 5. Stitch the graph back together
+            stitchNewTriangles(freshlyGeneratedTriangles, survivingBorderTriangles);
+        }
+    }
+
     public void createEntitiesFromMap(Engine engine) {
         // Process object layers to create entities
         MapLayer objectLayer = map.getLayers().get("Objects");
