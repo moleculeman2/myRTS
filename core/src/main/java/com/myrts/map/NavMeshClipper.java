@@ -72,6 +72,11 @@ public class NavMeshClipper {
         // 3. THE MATH: Subtract the building from the cavity!
         Geometry result = cavityPoly.difference(buildingPoly);
 
+        if (result.isEmpty()) {
+            System.out.println("Building completely filled the cavity. No navmesh left to generate.");
+            return new ArrayList<>();
+        }
+
         // 4. Parse the output back into Poly2Tri format
         List<org.poly2tri.geometry.polygon.Polygon> p2tPolygons = new ArrayList<>();
 
