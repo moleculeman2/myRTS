@@ -6,21 +6,28 @@ import com.badlogic.gdx.utils.IntArray;
 import org.poly2tri.geometry.polygon.Polygon;
 import org.poly2tri.geometry.polygon.PolygonPoint;
 
+import org.locationtech.jts.geom.Coordinate;
+import org.locationtech.jts.geom.Geometry;
+import org.locationtech.jts.geom.GeometryFactory;
+import org.locationtech.jts.geom.LinearRing;
+
 import java.util.*;
 
 /**
  * This class traces the contours of walkable areas in a tilemap.
  * It uses a flood-fill approach to find connected walkable tiles and then
  * traces the boundaries to create polygons suitable for triangulation.
+ * JTS is utilized to safely resolve shared vertices, and all operations
+ * are strictly locked to integer coordinates to prevent floating point drift.
  */
 public class ContourTracer {
 
-    // A simple class to represent a vertex point using integer grid coordinates.
-    // We override equals() and hashCode() so it can be used as a key in a Map.
+    // A simple class to represent a vertex point strictly using integer grid coordinates.
+    // By enforcing integers, we completely eliminate floating point imprecision.
     public static class Point {
-        double x, y;
+        public final int x, y;
 
-        Point(double  x, double y) {
+        public Point(int x, int y) {
             this.x = x;
             this.y = y;
         }
@@ -30,12 +37,12 @@ public class ContourTracer {
             if (this == o) return true;
             if (o == null || getClass() != o.getClass()) return false;
             Point point = (Point) o;
-            return Math.abs(point.x - x) < 1e-9 && Math.abs(point.y - y) < 1e-9;
+            return x == point.x && y == point.y; // Exact integer match
         }
 
         @Override
         public int hashCode() {
-            return 31 * (int)Math.round(x) + (int)Math.round(y);
+            return 31 * x + y;
         }
 
         @Override
@@ -44,12 +51,11 @@ public class ContourTracer {
         }
     }
 
-    // Represents an edge between two points. Also has a robust equals/hashCode
-    // to treat Edge(A,B) and Edge(B,A) as the same.
+    // Represents an edge between two points. Treats Edge(A,B) and Edge(B,A) as identical.
     private static class Edge {
-        final Point p1, p2;
+        public final Point p1, p2;
 
-        Edge(Point p1, Point p2) {
+        public Edge(Point p1, Point p2) {
             // Standardize the order to make equals/hashCode reliable
             if (p1.hashCode() < p2.hashCode()) {
                 this.p1 = p1;
@@ -74,34 +80,6 @@ public class ContourTracer {
         }
     }
 
-    // A proper edge class that treats Edge(A,B) and Edge(B,A) as identical
-    private static class UndirectedEdge {
-        Vector2 v1, v2;
-
-        UndirectedEdge(Vector2 v1, Vector2 v2) {
-            // Sort by hashcode so direction doesn't matter for equals()
-            if (v1.hashCode() < v2.hashCode()) {
-                this.v1 = v1; this.v2 = v2;
-            } else {
-                this.v1 = v2; this.v2 = v1;
-            }
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (!(o instanceof UndirectedEdge)) return false;
-            UndirectedEdge edge = (UndirectedEdge) o;
-            // == is safe here ONLY because we unify Vector2 references first!
-            return v1 == edge.v1 && v2 == edge.v2;
-        }
-
-        @Override
-        public int hashCode() {
-            return v1.hashCode() ^ v2.hashCode();
-        }
-    }
-
     /**
      * Main entry point. Traces all walkable areas in the map.
      * @param mapManager The map manager containing the collision data.
@@ -123,19 +101,15 @@ public class ContourTracer {
 
                     if (rawPolygons.isEmpty()) continue;
 
-                    // This happens BEFORE we send the data to Poly2Tri
-                    resolveSharedVertices(rawPolygons);
-
-                    // Create a new list to hold the simplified polygons.
+                    // Simplify first to remove collinear points before JTS processes them
                     List<List<Point>> simplifiedPolygons = new ArrayList<>();
                     for (List<Point> polygonPath : rawPolygons) {
-                        // Replace each polygon with its simplified version.
                         simplifiedPolygons.add(simplifyPolygon(polygonPath));
                     }
 
-                    // 3. Convert raw polygons into Poly2Tri polygons and identify holes.
-                    Polygon mainPolygon = createNavmeshPolygon(simplifiedPolygons, mapManager);
-                    finalPolygons.add(mainPolygon);
+                    // 3. Convert to Poly2Tri via JTS to resolve shared vertices perfectly on the grid
+                    List<Polygon> validPolys = buildValidNavmeshPolygons(simplifiedPolygons, mapManager);
+                    finalPolygons.addAll(validPolys);
                 }
             }
         }
@@ -152,7 +126,6 @@ public class ContourTracer {
         IntArray stack = new IntArray();
 
         // 2. Pack the starting X and Y into a single integer
-        // We shift X to the left by 16 bits, and merge it with Y using bitwise OR.
         stack.add((startX << 16) | (startY & 0xFFFF));
         visited[startX][startY] = true;
 
@@ -195,6 +168,38 @@ public class ContourTracer {
     }
 
     /**
+     * Takes an array of floating point boundary edges, instantly snaps them to the integer grid,
+     * and constructs standard integer polygons out of them.
+     */
+    public static List<List<Point>> assemblePolygons(Array<Vector2[]> boundaryEdges) {
+        if (boundaryEdges == null || boundaryEdges.size == 0) return new ArrayList<>();
+
+        Set<Edge> edges = new HashSet<>();
+
+        for (Vector2[] bEdge : boundaryEdges) {
+            // Snap floating point coordinates directly to the exact integer tile grid
+            Point p1 = new Point(Math.round(bEdge[0].x), Math.round(bEdge[0].y));
+            Point p2 = new Point(Math.round(bEdge[1].x), Math.round(bEdge[1].y));
+
+            // Ignore degenerate zero-length edges that might occur after snapping
+            if (p1.equals(p2)) continue;
+
+            Edge e = new Edge(p1, p2);
+
+            // If the edge is already in the set, it means two triangles shared it.
+            // Therefore, it's an internal edge. Cancel it out!
+            if (edges.contains(e)) {
+                edges.remove(e);
+            } else {
+                edges.add(e);
+            }
+        }
+
+        // Now that we have a clean set of strict integer Edges, delegate to the core assembler
+        return assemblePolygons(edges);
+    }
+
+    /**
      * Takes a set of unordered boundary edges and connects them into ordered polygon loops.
      */
     private static List<List<Point>> assemblePolygons(Set<Edge> edges) {
@@ -226,103 +231,19 @@ public class ContourTracer {
                     }
                 }
 
-                if (nextEdge == null) break; // Should not happen in a closed loop
+                if (nextEdge == null) {
+                    System.err.println("Warning: Open loop detected! Skipping broken cavity piece.");
+                    break;
+                }
 
                 edges.remove(nextEdge);
                 // Figure out which point of the new edge is the one we haven't visited yet
                 currentPoint = nextEdge.p1.equals(currentPoint) ? nextEdge.p2 : nextEdge.p1;
                 path.add(currentPoint);
             }
-            // The last point is a duplicate of the start, remove it.
-            path.remove(path.size() - 1);
-            polygons.add(path);
-        }
-        return polygons;
-    }
-
-    /**
-     * Takes a set of unordered boundary edges and connects them into ordered polygon loops.
-     */
-    public static List<List<Point>> assemblePolygons(Array<Vector2[]> boundaryEdges) {
-        List<List<Point>> polygons = new ArrayList<>();
-        if (boundaryEdges == null || boundaryEdges.size == 0) return polygons;
-
-        // 1. UNIFY VERTICES to fix floating-point drift!
-        float EPSILON = 0.5f; // Tolerance (half a pixel/unit)
-        List<Vector2> uniqueVertices = new ArrayList<>();
-
-        for (Vector2[] bEdge : boundaryEdges) {
-            for (int i = 0; i < 2; i++) {
-                boolean found = false;
-                for (Vector2 unique : uniqueVertices) {
-                    if (unique.dst(bEdge[i]) < EPSILON) {
-                        bEdge[i] = unique; // Snap to the unified reference
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
-                    uniqueVertices.add(bEdge[i]);
-                }
-            }
-        }
-
-        // 2. Build Adjacency Map (Now flawlessly stable because references are unified)
-        Map<Vector2, List<UndirectedEdge>> edgeMap = new HashMap<>();
-        Set<UndirectedEdge> edges = new HashSet<>();
-
-        for (Vector2[] bEdge : boundaryEdges) {
-            UndirectedEdge e = new UndirectedEdge(bEdge[0], bEdge[1]);
-
-            // THE FIX: If the edge is already in the set, it means two triangles shared it.
-            // Therefore, it's an internal edge. Cancel it out!
-            if (edges.contains(e)) {
-                edges.remove(e);
-            } else {
-                edges.add(e);
-            }
-        }
-
-        // Build the map only from the surviving, true outer boundary edges
-        for (UndirectedEdge e : edges) {
-            edgeMap.computeIfAbsent(e.v1, k -> new ArrayList<>()).add(e);
-            edgeMap.computeIfAbsent(e.v2, k -> new ArrayList<>()).add(e);
-        }
-
-        // 3. Assemble the Loops
-        while (!edges.isEmpty()) {
-            List<Point> path = new ArrayList<>();
-            UndirectedEdge startEdge = edges.iterator().next();
-            edges.remove(startEdge);
-
-            Vector2 startPoint = startEdge.v1;
-            Vector2 currentPoint = startEdge.v2;
-
-            path.add(new Point(startPoint.x, startPoint.y));
-            path.add(new Point(currentPoint.x, currentPoint.y));
-
-            // We can safely use != because we unified the Object references in Step 1
-            while (currentPoint != startPoint) {
-                UndirectedEdge nextEdge = null;
-                for (UndirectedEdge candidate : edgeMap.get(currentPoint)) {
-                    if (edges.contains(candidate)) {
-                        nextEdge = candidate;
-                        break;
-                    }
-                }
-
-                if (nextEdge == null) {
-                    System.err.println("Warning: Open loop detected! Skipping broken cavity piece.");
-                    break; // Gracefully handle instead of infinite looping
-                }
-
-                edges.remove(nextEdge);
-                currentPoint = (nextEdge.v1 == currentPoint) ? nextEdge.v2 : nextEdge.v1;
-                path.add(new Point(currentPoint.x, currentPoint.y));
-            }
 
             // Remove the closing duplicate point if loop completed successfully
-            if (path.size() > 2 && path.get(path.size() - 1).x == path.get(0).x && path.get(path.size() - 1).y == path.get(0).y) {
+            if (path.size() > 2 && path.get(path.size() - 1).equals(path.get(0))) {
                 path.remove(path.size() - 1);
             }
 
@@ -335,129 +256,29 @@ public class ContourTracer {
     }
 
     /**
-     * Converts the raw integer-based polygons into Poly2Tri format and identifies holes.
-     */
-    private static Polygon createNavmeshPolygon(List<List<Point>> rawPolygons, MapManager mapManager) {
-        // Your heuristic: the polygon with the most points is the outer one.
-        Collections.sort(rawPolygons, new Comparator<List<Point>>() {
-            @Override
-            public int compare(List<Point> p1, List<Point> p2) {
-                // We want to sort in descending order (largest first),
-                // so we compare p2's size to p1's size.
-                return Integer.valueOf(p2.size()).compareTo(p1.size());
-            }
-        });
-
-        // Create the main outer polygon
-        List<Point> mainRawPoly = rawPolygons.get(0);
-        List<PolygonPoint> mainPolyPoints = new ArrayList<>();
-        for (Point p : mainRawPoly) {
-            mainPolyPoints.add(new PolygonPoint(p.x * mapManager.getTileWidth(), p.y * mapManager.getTileHeight()));
-        }
-        Polygon mainPolygon = new Polygon(mainPolyPoints);
-
-        // Add the rest as holes
-        for (int i = 1; i < rawPolygons.size(); i++) {
-            List<Point> holeRawPoly = rawPolygons.get(i);
-            List<PolygonPoint> holePolyPoints = new ArrayList<>();
-            for (Point p : holeRawPoly) {
-                // IMPORTANT: Poly2Tri requires holes to have the opposite winding order (e.g., clockwise)
-                // of the outer polygon (e.g., counter-clockwise). Reversing the list is a simple way to do this.
-                holePolyPoints.add(new PolygonPoint(p.x * mapManager.getTileWidth(), p.y * mapManager.getTileHeight()));
-            }
-            Collections.reverse(holePolyPoints); // Flip the winding order
-            mainPolygon.addHole(new Polygon(holePolyPoints));
-        }
-
-        return mainPolygon;
-    }
-
-    /**
-     * Finds and resolves vertices that are shared between different polygon loops.
-     * This prevents self-intersecting polygons by "nudging" one of the vertices
-     * by a tiny epsilon value, effectively separating the polygons.
-     * @param rawPolygons The list of traced polygon loops.
-     */
-    private static void resolveSharedVertices(List<List<Point>> rawPolygons) {
-        // Create a set of all vertices for each polygon for quick lookups.
-        List<Set<Point>> polygonVertexSets = new ArrayList<>();
-        for (List<Point> poly : rawPolygons) {
-            polygonVertexSets.add(new HashSet<>(poly));
-        }
-
-        // Compare every polygon against every other polygon
-        for (int i = 0; i < rawPolygons.size(); i++) {
-            for (int j = i + 1; j < rawPolygons.size(); j++) {
-                Set<Point> poly1Set = polygonVertexSets.get(i);
-                List<Point> poly2List = rawPolygons.get(j);
-
-                // Now, check for shared points.
-                for (int k = 0; k < poly2List.size(); k++) {
-                    Point p = poly2List.get(k);
-                    if (poly1Set.contains(p)) {
-                        // SHARED VERTEX FOUND!
-                        // Nudge the vertex in the second polygon by a small amount.
-                        Point nudgedPoint = new Point((int) p.x, (int) p.y); // Create a new point to modify
-
-                        // We need to create a new Point object since our Point class is immutable.
-                        // Let's modify the Point class to be mutable for this to be easier.
-                        // For now, let's assume we can't and we replace it in the list.
-                        // A better implementation would make the Point class mutable.
-
-                        // In a real scenario, you would make the Point class's x/y fields non-final
-                        // and just modify them. Since ours are final, we replace the object.
-                        // This is less efficient but demonstrates the logic.
-                        // Let's pretend we can modify it for simplicity in the final code.
-
-                        // **Let's make a quick change to the Point class for this.**
-                        // Change the Point class fields from 'final int x, y;' to 'double x, y;'
-
-                        // Nudge logic: Move it slightly towards the center of its own edge.
-                        Point prev = poly2List.get((k == 0) ? poly2List.size() - 1 : k - 1);
-                        Point next = poly2List.get((k + 1) % poly2List.size());
-
-                        double dx1 = p.x - prev.x;
-                        double dy1 = p.y - prev.y;
-                        double dx2 = p.x - next.x;
-                        double dy2 = p.y - next.y;
-
-                        // Move the point 0.1% towards the average of its neighbors
-                        p.x -= (dx1 + dx2) * 0.001;
-                        p.y -= (dy1 + dy2) * 0.001;
-                    }
-                }
-            }
-        }
-    }
-    /**
      * Removes collinear points from a polygon path to simplify it.
      * This reduces the vertex count without changing the shape.
      * @param path The list of points representing the polygon loop.
      * @return A new list of points with redundant vertices removed.
      */
     private static List<Point> simplifyPolygon(List<Point> path) {
-        // We need at least 3 points to have a collinear point to remove.
         if (path.size() < 3) {
             return path;
         }
 
         List<Point> simplifiedPath = new ArrayList<>();
 
-        // Iterate through all points in the path. The modulo operator (%) handles the wrap-around
-        // for the first and last points of the list.
         for (int i = 0; i < path.size(); i++) {
             Point prevPoint = path.get((i + path.size() - 1) % path.size());
             Point currentPoint = path.get(i);
             Point nextPoint = path.get((i + 1) % path.size());
 
-            // We use the 2D cross-product to check for collinearity. If the area
-            // of the triangle formed by the three points is zero, they are on a line.
-            double crossProduct = (currentPoint.x - prevPoint.x) * (nextPoint.y - prevPoint.y) -
-                (currentPoint.y - prevPoint.y) * (nextPoint.x - prevPoint.x);
+            // Use an exact long integer cross-product area.
+            // If the area is exactly 0, they are perfectly collinear. No epsilons!
+            long crossProduct = (long)(currentPoint.x - prevPoint.x) * (nextPoint.y - prevPoint.y) -
+                (long)(currentPoint.y - prevPoint.y) * (nextPoint.x - prevPoint.x);
 
-            // Keep the current point only if it's a corner (not collinear).
-            // We use a small epsilon to handle floating-point inaccuracies.
-            if (Math.abs(crossProduct) > 1e-9) {
+            if (crossProduct != 0) {
                 simplifiedPath.add(currentPoint);
             }
         }
@@ -465,4 +286,76 @@ public class ContourTracer {
         return simplifiedPath;
     }
 
+    /**
+     * Uses JTS to safely split polygons with shared vertices without losing grid precision.
+     */
+    private static List<Polygon> buildValidNavmeshPolygons(List<List<Point>> rawPolygons, MapManager mapManager) {
+        List<Polygon> result = new ArrayList<>();
+        if (rawPolygons.isEmpty()) return result;
+
+        // Sort by size descending: index 0 is the outer shell, rest are holes
+        rawPolygons.sort((p1, p2) -> Integer.compare(p2.size(), p1.size()));
+
+        GeometryFactory gf = new GeometryFactory();
+
+        // Build Shell
+        LinearRing shell = createJtsRing(gf, rawPolygons.get(0));
+
+        // Build Holes
+        LinearRing[] holes = new LinearRing[rawPolygons.size() - 1];
+        for (int i = 1; i < rawPolygons.size(); i++) {
+            holes[i - 1] = createJtsRing(gf, rawPolygons.get(i));
+        }
+
+        // Create initial JTS Polygon. It might have shared vertices (invalid topology for Poly2Tri).
+        org.locationtech.jts.geom.Polygon jtsPoly = gf.createPolygon(shell, holes);
+
+        // --- THE MAGIC BULLET ---
+        // buffer(0) strictly preserves grid coordinates. It acts as a topology normalizer.
+        // It resolves "pinches" (shared vertices) by splitting the invalid polygon into a valid MultiPolygon.
+        Geometry fixedGeo = jtsPoly.buffer(0);
+
+        // fixedGeo might be a single Polygon or a MultiPolygon (if shared vertices were split)
+        for (int i = 0; i < fixedGeo.getNumGeometries(); i++) {
+            org.locationtech.jts.geom.Polygon validJtsPoly = (org.locationtech.jts.geom.Polygon) fixedGeo.getGeometryN(i);
+
+            // Convert JTS Polygon back to Poly2Tri Polygon
+            Polygon p2tPolygon = toPoly2Tri(validJtsPoly.getExteriorRing(), mapManager, false);
+
+            // Add the interior holes back in
+            for (int j = 0; j < validJtsPoly.getNumInteriorRing(); j++) {
+                p2tPolygon.addHole(toPoly2Tri(validJtsPoly.getInteriorRingN(j), mapManager, true));
+            }
+            result.add(p2tPolygon);
+        }
+
+        return result;
+    }
+
+    private static LinearRing createJtsRing(GeometryFactory gf, List<Point> path) {
+        Coordinate[] coords = new Coordinate[path.size() + 1];
+        for (int i = 0; i < path.size(); i++) {
+            coords[i] = new Coordinate(path.get(i).x, path.get(i).y);
+        }
+        // JTS rings must explicitly close (last vertex == first vertex)
+        coords[path.size()] = new Coordinate(path.get(0).x, path.get(0).y);
+        return gf.createLinearRing(coords);
+    }
+
+    private static Polygon toPoly2Tri(org.locationtech.jts.geom.LineString ring, MapManager mapManager, boolean isHole) {
+        Coordinate[] coords = ring.getCoordinates();
+        List<PolygonPoint> points = new ArrayList<>();
+
+        // JTS rings are closed, so we skip the last coordinate for Poly2Tri (which expects open paths)
+        for (int i = 0; i < coords.length - 1; i++) {
+            points.add(new PolygonPoint(coords[i].x * mapManager.getTileWidth(), coords[i].y * mapManager.getTileHeight()));
+        }
+
+        // Poly2Tri generally expects opposite winding orders for holes.
+        if (isHole) {
+            Collections.reverse(points);
+        }
+
+        return new Polygon(points);
+    }
 }
