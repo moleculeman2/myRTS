@@ -13,7 +13,8 @@ public class NavMeshRenderer {
      * IMPORTANT: The caller MUST have already called shapeRenderer.begin(ShapeType.Line)
      * before using this method!
      * * @param shapeRenderer The ShapeRenderer to use for drawing.
-     * @param triangles     The list of DelaunayTriangle objects to draw.
+     *
+     * @param triangles The list of DelaunayTriangle objects to draw.
      */
     public static void drawDelaunay(ShapeRenderer shapeRenderer, Array<DelaunayTriangle> triangles) {
         if (triangles == null || triangles.isEmpty()) {
@@ -36,4 +37,82 @@ public class NavMeshRenderer {
 
         // We no longer call end() here!
     }
+
+    public static void drawNeighborLinks(ShapeRenderer shapeRenderer, Array<DelaunayTriangle> triangles, float tickLength) {
+        if (triangles == null || triangles.isEmpty()) {
+            return;
+        }
+
+        shapeRenderer.setColor(Color.YELLOW);
+
+        for (DelaunayTriangle tri : triangles) {
+            for (int i = 0; i < 3; i++) {
+                // Check that the neighbor exists AND the edge is NOT constrained (blocked)
+                if (tri.neighbors[i] != null && !tri.cEdge[i]) {
+                    TriangulationPoint p1 = null;
+                    TriangulationPoint p2 = null;
+
+                    if (i == 0) {
+                        p1 = tri.points[1];
+                        p2 = tri.points[2];
+                    } else if (i == 1) {
+                        p1 = tri.points[0];
+                        p2 = tri.points[2];
+                    } else if (i == 2) {
+                        p1 = tri.points[0];
+                        p2 = tri.points[1];
+                    }
+
+                    if (p1 != null && p2 != null) {
+                        float x1 = p1.getXf();
+                        float y1 = p1.getYf();
+                        float x2 = p2.getXf();
+                        float y2 = p2.getYf();
+
+                        float midX = (x1 + x2) / 2f;
+                        float midY = (y1 + y2) / 2f;
+
+                        float dx = x2 - x1;
+                        float dy = y2 - y1;
+
+                        float len = (float) Math.sqrt(dx * dx + dy * dy);
+                        if (len > 0) {
+                            dx /= len;
+                            dy /= len;
+
+                            float perpX = -dy;
+                            float perpY = dx;
+
+                            shapeRenderer.line(
+                                midX - (perpX * tickLength), midY - (perpY * tickLength),
+                                midX + (perpX * tickLength), midY + (perpY * tickLength)
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    public static void drawCentroidLinks(ShapeRenderer shapeRenderer, Array<DelaunayTriangle> triangles) {
+        if (triangles == null || triangles.isEmpty()) return;
+
+        shapeRenderer.setColor(Color.YELLOW);
+
+        for (DelaunayTriangle tri : triangles) {
+            float cx1 = (float) tri.centroid().getX();
+            float cy1 = (float) tri.centroid().getY();
+
+            for (int i = 0; i < 3; i++) {
+                // Check that the neighbor exists AND the edge is NOT constrained (blocked)
+                if (tri.neighbors[i] != null && !tri.cEdge[i]) {
+                    float cx2 = (float) tri.neighbors[i].centroid().getX();
+                    float cy2 = (float) tri.neighbors[i].centroid().getY();
+
+                    shapeRenderer.line(cx1, cy1, cx2, cy2);
+                }
+            }
+        }
+    }
+
 }

@@ -122,23 +122,24 @@ public class ContourTracer {
     private static Set<Edge> extractBoundaryEdges(MapManager mapManager, boolean[][] visited, int startX, int startY) {
         Set<Edge> edges = new HashSet<>();
 
-        // 1. Use LibGDX's primitive array. No object overhead!
-        IntArray stack = new IntArray();
+        // 1. Use an Array of Point objects instead of an IntArray.
+        // This is much easier to read and debug.
+        Array<Point> stack = new Array<>();
 
-        // 2. Pack the starting X and Y into a single integer
-        stack.add((startX << 16) | (startY & 0xFFFF));
+        // 2. Push the starting coordinates as a Point
+        stack.add(new Point(startX, startY));
         visited[startX][startY] = true;
 
         int[] dx = {0, 1, 0, -1}; // Top, Right, Bottom, Left
         int[] dy = {1, 0, -1, 0};
 
         while (stack.size > 0) {
-            // 3. Pop from the end of the array (O(1) speed, Depth-First Search)
-            int current = stack.pop();
+            // 3. Pop the Point from the end of the array (Depth-First Search)
+            Point current = stack.pop();
 
-            // 4. Unpack the integer back into X and Y coordinates
-            int cx = current >>> 16;           // Shift right to get X
-            int cy = current & 0xFFFF;         // Mask to get Y
+            // 4. Access X and Y directly from the object properties
+            int cx = current.x;
+            int cy = current.y;
 
             for (int i = 0; i < 4; i++) {
                 int nx = cx + dx[i];
@@ -146,21 +147,21 @@ public class ContourTracer {
 
                 if (mapManager.isCollision(nx, ny)) {
                     // This neighbor is a wall, so we found a boundary edge.
-                    Point p1, p2;
+                    Point p1 = null, p2 = null;
                     if (i == 0) { // Top edge
                         p1 = new Point(cx, cy + 1); p2 = new Point(cx + 1, cy + 1);
                     } else if (i == 1) { // Right edge
                         p1 = new Point(cx + 1, cy + 1); p2 = new Point(cx + 1, cy);
                     } else if (i == 2) { // Bottom edge
                         p1 = new Point(cx + 1, cy); p2 = new Point(cx, cy);
-                    } else { // Left edge
+                    } else if (i == 3) { // Left edge
                         p1 = new Point(cx, cy); p2 = new Point(cx, cy + 1);
                     }
                     edges.add(new Edge(p1, p2));
                 } else if (!visited[nx][ny]) {
                     visited[nx][ny] = true;
-                    // Pack and push the new tile
-                    stack.add((nx << 16) | (ny & 0xFFFF));
+                    // Push the new unvisited neighbor onto the stack
+                    stack.add(new Point(nx, ny));
                 }
             }
         }

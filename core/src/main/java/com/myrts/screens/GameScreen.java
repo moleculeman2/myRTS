@@ -88,7 +88,10 @@ public class GameScreen implements Screen {
         // Render Debug/NavMesh (Optional)
         shapeRenderer.setProjectionMatrix(camera.combined);
         shapeRenderer.begin(ShapeRenderer.ShapeType.Line);
+
         NavMeshRenderer.drawDelaunay(shapeRenderer, mapManager.getNavMeshTriangles());
+        NavMeshRenderer.drawNeighborLinks(shapeRenderer, mapManager.getNavMeshTriangles(), 6);
+
         shapeRenderer.end();
     }
 
