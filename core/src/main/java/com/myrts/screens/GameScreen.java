@@ -13,6 +13,7 @@ import com.myrts.map.MapManager;
 import com.myrts.map.NavMeshRenderer;
 import com.myrts.systems.RenderSystem;
 import com.myrts.entities.EntityFactory;
+import org.poly2tri.triangulation.delaunay.DelaunayTriangle;
 
 public class GameScreen implements Screen {
     private final GameBase game;
@@ -90,8 +91,11 @@ public class GameScreen implements Screen {
         shapeRenderer.begin(ShapeRenderer.ShapeType.Line);
 
         NavMeshRenderer.drawDelaunay(shapeRenderer, mapManager.getNavMeshTriangles());
+        //NavMeshRenderer.drawCentroidLinks(shapeRenderer, mapManager.getNavMeshTriangles());
         NavMeshRenderer.drawNeighborLinks(shapeRenderer, mapManager.getNavMeshTriangles(), 6);
-
+        for (DelaunayTriangle triangle : mapManager.getNavMeshTriangles()) {
+            NavMeshRenderer.drawNeighborTickMarks(shapeRenderer, triangle);
+        }
         shapeRenderer.end();
     }
 

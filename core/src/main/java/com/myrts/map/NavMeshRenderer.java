@@ -5,6 +5,7 @@ import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.utils.Array;
 import org.poly2tri.triangulation.TriangulationPoint;
 import org.poly2tri.triangulation.delaunay.DelaunayTriangle;
+import org.poly2tri.triangulation.point.TPoint;
 
 public class NavMeshRenderer {
 
@@ -47,8 +48,8 @@ public class NavMeshRenderer {
 
         for (DelaunayTriangle tri : triangles) {
             for (int i = 0; i < 3; i++) {
-                // Check that the neighbor exists AND the edge is NOT constrained (blocked)
-                if (tri.neighbors[i] != null && !tri.cEdge[i]) {
+                // Check that the neighbor exists
+                if (tri.neighbors[i] != null) {
                     TriangulationPoint p1 = null;
                     TriangulationPoint p2 = null;
 
@@ -85,7 +86,7 @@ public class NavMeshRenderer {
 
                             shapeRenderer.line(
                                 midX - (perpX * tickLength), midY - (perpY * tickLength),
-                                midX + (perpX * tickLength), midY + (perpY * tickLength)
+                                midX - (perpX ), midY - (perpY )
                             );
                         }
                     }
@@ -105,13 +106,63 @@ public class NavMeshRenderer {
 
             for (int i = 0; i < 3; i++) {
                 // Check that the neighbor exists AND the edge is NOT constrained (blocked)
-                if (tri.neighbors[i] != null && !tri.cEdge[i]) {
+                if (tri.neighbors[i] != null) {
                     float cx2 = (float) tri.neighbors[i].centroid().getX();
                     float cy2 = (float) tri.neighbors[i].centroid().getY();
 
                     shapeRenderer.line(cx1, cy1, cx2, cy2);
                 }
             }
+        }
+    }
+
+    /**
+     * Draws tick marks in the center of a triangle based on how many neighbors it has.
+     * Ensure that shapeRenderer.begin(ShapeType.Line) has been called before using this.
+     *
+     * @param triangle The triangle to evaluate and draw in.
+     * @param shapeRenderer The ShapeRenderer used for drawing.
+     */
+    public static void drawNeighborTickMarks( ShapeRenderer shapeRenderer, DelaunayTriangle triangle) {
+        // Count the number of non-null neighbors
+        int neighborCount = 0;
+        for (int i = 0; i < 3; i++) {
+            if (triangle.neighbors[i] != null) {
+                neighborCount++;
+            }
+        }
+
+        // If it has no neighbors, we don't draw anything
+        if (neighborCount == 0) return;
+
+        // Get the center of the triangle
+        TPoint centroid = triangle.centroid();
+        float cx = (float) centroid.getX();
+        float cy = (float) centroid.getY();
+
+        // ** Adjust these values based on your game's world scale! **
+        // If your world is 1 unit = 1 pixel, you might want length = 10f, spacing = 4f
+        // If your world is 1 unit = 1 tile (e.g., 32px), you might want length = 0.4f, spacing = 0.15f
+        float tickLength = 8f;
+        float spacing = 3f;
+        float halfLength = tickLength / 2f;
+
+        // Draw the tick marks based on the neighbor count
+        if (neighborCount == 1) {
+            // "I" - One line perfectly centered
+            shapeRenderer.line(cx, cy - halfLength, cx, cy + halfLength);
+        }
+        else if (neighborCount == 2) {
+            // "II" - Two lines offset equally from the center
+            float offset = spacing / 2f;
+            shapeRenderer.line(cx - offset, cy - halfLength, cx - offset, cy + halfLength);
+            shapeRenderer.line(cx + offset, cy - halfLength, cx + offset, cy + halfLength);
+        }
+        else if (neighborCount == 3) {
+            // "III" - One line centered, one on the left, one on the right
+            shapeRenderer.line(cx - spacing, cy - halfLength, cx - spacing, cy + halfLength);
+            shapeRenderer.line(cx, cy - halfLength, cx, cy + halfLength);
+            shapeRenderer.line(cx + spacing, cy - halfLength, cx + spacing, cy + halfLength);
         }
     }
 

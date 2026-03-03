@@ -72,9 +72,15 @@ public class MapManager {
         for (Polygon polygon : polygonsToTriangulate) {
             Poly2Tri.triangulate(polygon);
             for (DelaunayTriangle triangle : polygon.getTriangles()) {
+                for (int i = 0; i < 3; i++) {
+                    if (triangle.neighbors[i] != null && !triangle.neighbors[i].isInterior()) {
+                        triangle.neighbors[i] = null; // Sever the tie to the dead triangle
+                    }
+                }
                 navMeshTriangles.add(triangle);
             }
         }
+        //linkNavMeshNeighbors();
         System.out.println("Generated navmesh with " + navMeshTriangles.size + " triangles.");
     }
 
@@ -103,6 +109,42 @@ public class MapManager {
             }
         }
     }
+
+    /**
+     * Loops through the generated navmesh and ensures that all neighboring
+     * triangles are properly bi-directionally linked.
+     */
+    private void linkNavMeshNeighbors() {
+        if (navMeshTriangles == null) return;
+
+        // First pass: Loop forward through every DelaunayTriangle
+        for (int i = 0; i < navMeshTriangles.size; i++) {
+            DelaunayTriangle triangle = navMeshTriangles.get(i);
+
+            for (int j = 0; j < 3; j++) {
+                DelaunayTriangle neighbor = triangle.neighbors[j];
+                if (neighbor != null) {
+                    neighbor.markNeighbor(triangle);
+                }
+            }
+        }
+
+        // Second pass: Loop backward through the array
+        for (int i = navMeshTriangles.size - 1; i >= 0; i--) {
+            DelaunayTriangle triangle = navMeshTriangles.get(i);
+
+            for (int j = 0; j < 3; j++) {
+                DelaunayTriangle neighbor = triangle.neighbors[j];
+                if (neighbor != null) {
+                    neighbor.markNeighbor(triangle);
+                }
+            }
+        }
+
+        System.out.println("Successfully linked navmesh neighbors (forward and backward passes).");
+    }
+
+
 
     /**
      * Finds and removes any navmesh triangles that intersect with the given bounding box.
@@ -229,8 +271,12 @@ public class MapManager {
     /**
      * Reconnects the newly generated triangles to the surviving navmesh graph.
      */
+    /**
+     * Reconnects the newly generated triangles to the surviving navmesh graph.
+     */
     public void stitchNewTriangles(Array<DelaunayTriangle> newTriangles, Array<DelaunayTriangle> borderTriangles) {
-        float epsilon = 0.1f;
+        // 1. INCREASE EPSILON: Account for JTS PrecisionModel(10.0) rounding errors.
+        float epsilon = 1.0f;
 
         for (DelaunayTriangle newTri : newTriangles) {
             for (int i = 0; i < 3; i++) {
@@ -240,11 +286,10 @@ public class MapManager {
                     float nx2 = newTri.points[(i + 2) % 3].getXf();
                     float ny2 = newTri.points[(i + 2) % 3].getYf();
 
+                    boolean matched = false;
+
                     // Search ONLY the handful of border triangles instead of the whole map
                     for (DelaunayTriangle oldTri : borderTriangles) {
-
-                        // (You can remove the "if (newTriangles.contains(oldTri...)" check now,
-                        // because we know borderTriangles only contains old, surviving mesh triangles!)
 
                         for (int j = 0; j < 3; j++) {
                             if (oldTri.neighbors[j] == null) {
@@ -259,11 +304,23 @@ public class MapManager {
                                     (Math.abs(nx2 - ox2) < epsilon && Math.abs(ny2 - oy2) < epsilon);
 
                                 if (match1 || match2) {
+                                    // Topologically link them
                                     newTri.neighbors[i] = oldTri;
                                     oldTri.neighbors[j] = newTri;
+
+                                    // 2. CLEAR CONSTRAINED EDGES: Tell Poly2Tri/Pathfinding this is no longer a boundary wall
+                                    newTri.cEdge[i] = false;
+                                    oldTri.cEdge[j] = false;
+
+                                    matched = true;
                                     break;
                                 }
                             }
+                        }
+
+                        // 3. BREAK OUTER LOOP: Stop checking other border triangles once we find our match
+                        if (matched) {
+                            break;
                         }
                     }
                 }
@@ -326,6 +383,11 @@ public class MapManager {
 
                 // Collect the new triangles
                 for (DelaunayTriangle tri : polyToTriangulate.getTriangles()) {
+                    for (int i = 0; i < 3; i++) {
+                        if (tri.neighbors[i] != null && !tri.neighbors[i].isInterior()) {
+                            tri.neighbors[i] = null;
+                        }
+                    }
                     freshlyGeneratedTriangles.add(tri);
                     getNavMeshTriangles().add(tri); // Add to main map list
                 }
