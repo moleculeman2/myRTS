@@ -91,11 +91,7 @@ public class GameScreen implements Screen {
         shapeRenderer.begin(ShapeRenderer.ShapeType.Line);
 
         NavMeshRenderer.drawDelaunay(shapeRenderer, mapManager.getNavMeshTriangles());
-        //NavMeshRenderer.drawCentroidLinks(shapeRenderer, mapManager.getNavMeshTriangles());
-        NavMeshRenderer.drawNeighborLinks(shapeRenderer, mapManager.getNavMeshTriangles(), 6);
-        for (DelaunayTriangle triangle : mapManager.getNavMeshTriangles()) {
-            NavMeshRenderer.drawNeighborTickMarks(shapeRenderer, triangle);
-        }
+        NavMeshRenderer.drawNeighborTickMarks(shapeRenderer, mapManager.getNavMeshTriangles());//NavMeshRenderer.drawCentroidLinks(shapeRenderer, mapManager.getNavMeshTriangles());
         shapeRenderer.end();
     }
 

@@ -39,62 +39,6 @@ public class NavMeshRenderer {
         // We no longer call end() here!
     }
 
-    public static void drawNeighborLinks(ShapeRenderer shapeRenderer, Array<DelaunayTriangle> triangles, float tickLength) {
-        if (triangles == null || triangles.isEmpty()) {
-            return;
-        }
-
-        shapeRenderer.setColor(Color.YELLOW);
-
-        for (DelaunayTriangle tri : triangles) {
-            for (int i = 0; i < 3; i++) {
-                // Check that the neighbor exists
-                if (tri.neighbors[i] != null) {
-                    TriangulationPoint p1 = null;
-                    TriangulationPoint p2 = null;
-
-                    if (i == 0) {
-                        p1 = tri.points[1];
-                        p2 = tri.points[2];
-                    } else if (i == 1) {
-                        p1 = tri.points[0];
-                        p2 = tri.points[2];
-                    } else if (i == 2) {
-                        p1 = tri.points[0];
-                        p2 = tri.points[1];
-                    }
-
-                    if (p1 != null && p2 != null) {
-                        float x1 = p1.getXf();
-                        float y1 = p1.getYf();
-                        float x2 = p2.getXf();
-                        float y2 = p2.getYf();
-
-                        float midX = (x1 + x2) / 2f;
-                        float midY = (y1 + y2) / 2f;
-
-                        float dx = x2 - x1;
-                        float dy = y2 - y1;
-
-                        float len = (float) Math.sqrt(dx * dx + dy * dy);
-                        if (len > 0) {
-                            dx /= len;
-                            dy /= len;
-
-                            float perpX = -dy;
-                            float perpY = dx;
-
-                            shapeRenderer.line(
-                                midX - (perpX * tickLength), midY - (perpY * tickLength),
-                                midX - (perpX ), midY - (perpY )
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     public static void drawCentroidLinks(ShapeRenderer shapeRenderer, Array<DelaunayTriangle> triangles) {
         if (triangles == null || triangles.isEmpty()) return;
 
@@ -120,49 +64,50 @@ public class NavMeshRenderer {
      * Draws tick marks in the center of a triangle based on how many neighbors it has.
      * Ensure that shapeRenderer.begin(ShapeType.Line) has been called before using this.
      *
-     * @param triangle The triangle to evaluate and draw in.
+     * @param triangles The triangle array to evaluate and draw in.
      * @param shapeRenderer The ShapeRenderer used for drawing.
      */
-    public static void drawNeighborTickMarks( ShapeRenderer shapeRenderer, DelaunayTriangle triangle) {
+    public static void drawNeighborTickMarks( ShapeRenderer shapeRenderer, Array<DelaunayTriangle> triangles) {
         // Count the number of non-null neighbors
-        int neighborCount = 0;
-        for (int i = 0; i < 3; i++) {
-            if (triangle.neighbors[i] != null) {
-                neighborCount++;
+        shapeRenderer.setColor(Color.YELLOW);
+        for (DelaunayTriangle triangle : triangles) {
+            int neighborCount = 0;
+            for (int i = 0; i < 3; i++) {
+                if (triangle.neighbors[i] != null) {
+                    neighborCount++;
+                }
             }
-        }
 
-        // If it has no neighbors, we don't draw anything
-        if (neighborCount == 0) return;
+            // If it has no neighbors, we don't draw anything
+            if (neighborCount == 0) return;
 
-        // Get the center of the triangle
-        TPoint centroid = triangle.centroid();
-        float cx = (float) centroid.getX();
-        float cy = (float) centroid.getY();
+            // Get the center of the triangle
+            TPoint centroid = triangle.centroid();
+            float cx = (float) centroid.getX();
+            float cy = (float) centroid.getY();
 
-        // ** Adjust these values based on your game's world scale! **
-        // If your world is 1 unit = 1 pixel, you might want length = 10f, spacing = 4f
-        // If your world is 1 unit = 1 tile (e.g., 32px), you might want length = 0.4f, spacing = 0.15f
-        float tickLength = 8f;
-        float spacing = 3f;
-        float halfLength = tickLength / 2f;
+            // ** Adjust these values based on your game's world scale! **
+            // If your world is 1 unit = 1 pixel, you might want length = 10f, spacing = 4f
+            // If your world is 1 unit = 1 tile (e.g., 32px), you might want length = 0.4f, spacing = 0.15f
+            float tickLength = 8f;
+            float spacing = 3f;
+            float halfLength = tickLength / 2f;
 
-        // Draw the tick marks based on the neighbor count
-        if (neighborCount == 1) {
-            // "I" - One line perfectly centered
-            shapeRenderer.line(cx, cy - halfLength, cx, cy + halfLength);
-        }
-        else if (neighborCount == 2) {
-            // "II" - Two lines offset equally from the center
-            float offset = spacing / 2f;
-            shapeRenderer.line(cx - offset, cy - halfLength, cx - offset, cy + halfLength);
-            shapeRenderer.line(cx + offset, cy - halfLength, cx + offset, cy + halfLength);
-        }
-        else if (neighborCount == 3) {
-            // "III" - One line centered, one on the left, one on the right
-            shapeRenderer.line(cx - spacing, cy - halfLength, cx - spacing, cy + halfLength);
-            shapeRenderer.line(cx, cy - halfLength, cx, cy + halfLength);
-            shapeRenderer.line(cx + spacing, cy - halfLength, cx + spacing, cy + halfLength);
+            // Draw the tick marks based on the neighbor count
+            if (neighborCount == 1) {
+                // "I" - One line perfectly centered
+                shapeRenderer.line(cx, cy - halfLength, cx, cy + halfLength);
+            } else if (neighborCount == 2) {
+                // "II" - Two lines offset equally from the center
+                float offset = spacing / 2f;
+                shapeRenderer.line(cx - offset, cy - halfLength, cx - offset, cy + halfLength);
+                shapeRenderer.line(cx + offset, cy - halfLength, cx + offset, cy + halfLength);
+            } else if (neighborCount == 3) {
+                // "III" - One line centered, one on the left, one on the right
+                shapeRenderer.line(cx - spacing, cy - halfLength, cx - spacing, cy + halfLength);
+                shapeRenderer.line(cx, cy - halfLength, cx, cy + halfLength);
+                shapeRenderer.line(cx + spacing, cy - halfLength, cx + spacing, cy + halfLength);
+            }
         }
     }
 
