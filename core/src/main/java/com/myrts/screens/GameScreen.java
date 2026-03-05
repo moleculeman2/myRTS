@@ -11,6 +11,8 @@ import com.myrts.GameBase;
 import com.myrts.input.InputProcessor;
 import com.myrts.map.MapManager;
 import com.myrts.map.NavMeshRenderer;
+import com.myrts.systems.BuildingDestructionSystem;
+import com.myrts.systems.ReaperSystem;
 import com.myrts.systems.RenderSystem;
 import com.myrts.entities.EntityFactory;
 import org.poly2tri.triangulation.delaunay.DelaunayTriangle;
@@ -43,6 +45,12 @@ public class GameScreen implements Screen {
 
     private void initializeSystems() {
         engine.addSystem(new RenderSystem(game.batch));
+        engine.addSystem(new BuildingDestructionSystem(mapManager));
+
+        // Give the Reaper a high priority number so it runs LAST
+        ReaperSystem reaper = new ReaperSystem();
+        reaper.priority = 100;
+        engine.addSystem(reaper);
     }
 
     @Override

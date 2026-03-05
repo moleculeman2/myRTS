@@ -1,12 +1,18 @@
 package com.myrts.input;
 
 import com.badlogic.ashley.core.Engine;
+import com.badlogic.ashley.core.Entity;
+import com.badlogic.ashley.core.Family;
+import com.badlogic.ashley.utils.ImmutableArray;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
 import com.badlogic.gdx.InputAdapter;
 import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.math.Vector3;
+import com.myrts.components.BuildingComponent;
+import com.myrts.components.DestroyedComponent;
+import com.myrts.components.TransformComponent;
 import com.myrts.entities.EntityFactory;
 import com.myrts.map.MapManager;
 
@@ -38,6 +44,10 @@ public class InputProcessor extends InputAdapter {
     public boolean keyDown(int keycode) {
         if (keycode == Input.Keys.B) {
             placingMode = !placingMode; // Toggle mode
+            return true;
+        }
+        if (keycode == Input.Keys.D) {
+            attemptBuildingDeletion();
             return true;
         }
         return false;
@@ -149,6 +159,33 @@ public class InputProcessor extends InputAdapter {
 
         // 2. Delegate Map changes to MapManager
         mapManager.registerBuildingObstacle(ghostPos.x, ghostPos.y, buildingWorldWidth, buildingWorldHeight, BUILDING_SIZE_TILES, BUILDING_SIZE_TILES);
+    }
+
+    private void attemptBuildingDeletion() {
+        // 1. Get current mouse world position
+        mouseWorldPos.set(Gdx.input.getX(), Gdx.input.getY(), 0);
+        camera.unproject(mouseWorldPos);
+
+        // 2. Get all buildings from the engine
+        Family family = Family.all(BuildingComponent.class, TransformComponent.class).get();
+        ImmutableArray<Entity> buildings = engine.getEntitiesFor(family);
+
+        // 3. Find if we are hovering over one
+        for (Entity entity : buildings) {
+            TransformComponent transform = entity.getComponent(TransformComponent.class);
+
+            // Simple AABB collision check point-to-box
+            if (mouseWorldPos.x >= transform.position.x &&
+                mouseWorldPos.x <= transform.position.x + transform.width &&
+                mouseWorldPos.y >= transform.position.y &&
+                mouseWorldPos.y <= transform.position.y + transform.height) {
+
+                // We found the building under the mouse! Tag it for destruction.
+                entity.add(new DestroyedComponent());
+                System.out.println("Tagged building for deletion.");
+                break; // Only destroy one at a time
+            }
+        }
     }
 
     // Getters for GameScreen rendering

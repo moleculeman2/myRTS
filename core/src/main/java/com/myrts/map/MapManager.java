@@ -398,6 +398,26 @@ public class MapManager {
         }
     }
 
+    /**
+     * Unregisters a building obstacle, freeing up the collision grid.
+     * (NavMesh re-stitching to be implemented later).
+     */
+    public void unregisterBuildingObstacle(float worldX, float worldY, float worldWidth, float worldHeight) {
+        int startTileX = (int) (worldX / getTileWidth());
+        int startTileY = (int) (worldY / getTileHeight());
+        int tilesW = (int) (worldWidth / getTileWidth());
+        int tilesH = (int) (worldHeight / getTileHeight());
+
+        for (int x = 0; x < tilesW; x++) {
+            for (int y = 0; y < tilesH; y++) {
+                setTileBlocked(startTileX + x, startTileY + y, false);
+            }
+        }
+
+        System.out.println("Freed tiles for destroyed building at " + startTileX + ", " + startTileY);
+        // TODO: Future NavMesh remeshing logic goes here
+    }
+
     public void createEntitiesFromMap(Engine engine) {
         // Process object layers to create entities
         MapLayer objectLayer = map.getLayers().get("Objects");
