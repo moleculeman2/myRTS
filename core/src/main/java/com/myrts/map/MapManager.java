@@ -111,90 +111,26 @@ public class MapManager {
     }
 
     /**
-     * Loops through the generated navmesh and ensures that all neighboring
-     * triangles are properly bi-directionally linked.
-     */
-    private void linkNavMeshNeighbors() {
-        if (navMeshTriangles == null) return;
-
-        // First pass: Loop forward through every DelaunayTriangle
-        for (int i = 0; i < navMeshTriangles.size; i++) {
-            DelaunayTriangle triangle = navMeshTriangles.get(i);
-
-            for (int j = 0; j < 3; j++) {
-                DelaunayTriangle neighbor = triangle.neighbors[j];
-                if (neighbor != null) {
-                    neighbor.markNeighbor(triangle);
-                }
-            }
-        }
-
-        // Second pass: Loop backward through the array
-        for (int i = navMeshTriangles.size - 1; i >= 0; i--) {
-            DelaunayTriangle triangle = navMeshTriangles.get(i);
-
-            for (int j = 0; j < 3; j++) {
-                DelaunayTriangle neighbor = triangle.neighbors[j];
-                if (neighbor != null) {
-                    neighbor.markNeighbor(triangle);
-                }
-            }
-        }
-
-        System.out.println("Successfully linked navmesh neighbors (forward and backward passes).");
-    }
-
-
-
-    /**
      * Finds and removes any navmesh triangles that intersect with the given bounding box.
      * @return An Array of the removed DelaunayTriangles.
      */
-    public Array<DelaunayTriangle> removeIntersectingTriangles(float x, float y, float width, float height) {
-        float inset = 0.1f;
+    public Array<DelaunayTriangle> removeBuildingIntersectingTriangles(float x, float y, float width, float height) {
+        // 1. Get the intersecting triangles using our helper method
+        // Large Search (Full size)
+        Array<DelaunayTriangle> fullSearchSet = getIntersectingTriangles(x, y, width, height, 0f);
+        // Small Search (Inset by 0.1f to shrink the box)
+        Array<DelaunayTriangle> smallSearchSet = getIntersectingTriangles(x, y, width, height, -0.1f);
 
-        // 1. Full-sized Polygon (Large Search)
-        float[] fullVertices = new float[] {
-            x, y,
-            x + width, y,
-            x + width, y + height,
-            x, y + height
-        };
-        com.badlogic.gdx.math.Polygon fullPoly = new com.badlogic.gdx.math.Polygon(fullVertices);
-
-        // 2. Inset Polygon (Small Search)
-        float[] insetVertices = new float[] {
-            x + inset, y + inset,
-            x + width - inset, y + inset,
-            x + width - inset, y + height - inset,
-            x + inset, y + height - inset
-        };
-        com.badlogic.gdx.math.Polygon insetPoly = new com.badlogic.gdx.math.Polygon(insetVertices);
-
-        Array<DelaunayTriangle> removedTriangles = new Array<>();
+        Array<DelaunayTriangle> removedTriangles = new Array<>(smallSearchSet); // Everything strictly inside is removed
         Array<DelaunayTriangle> survivingTriangles = new Array<>();
-
-        Array<DelaunayTriangle> smallSearchSet = new Array<>();
         Array<DelaunayTriangle> borderCandidates = new Array<>();
 
-        float[] triVertices = new float[6];
-        com.badlogic.gdx.math.Polygon triPoly = new com.badlogic.gdx.math.Polygon(triVertices);
-
-        // 3. First Pass: Categorize all triangles geometrically
+        // 2. First Pass: Categorize all triangles based on the sets we fetched
         for (DelaunayTriangle tri : navMeshTriangles) {
-            triVertices[0] = tri.points[0].getXf();
-            triVertices[1] = tri.points[0].getYf();
-            triVertices[2] = tri.points[1].getXf();
-            triVertices[3] = tri.points[1].getYf();
-            triVertices[4] = tri.points[2].getXf();
-            triVertices[5] = tri.points[2].getYf();
-            triPoly.setVertices(triVertices);
-
-            if (Intersector.overlapConvexPolygons(insetPoly, triPoly)) {
-                // Strictly inside/overlapping (Small Search)
-                smallSearchSet.add(tri);
-                removedTriangles.add(tri);
-            } else if (Intersector.overlapConvexPolygons(fullPoly, triPoly)) {
+            if (smallSearchSet.contains(tri, true)) {
+                // Strictly inside/overlapping (already added to removedTriangles)
+                continue;
+            } else if (fullSearchSet.contains(tri, true)) {
                 // Touching the outer border (Could be parallel edge OR armpit vertex)
                 borderCandidates.add(tri);
             } else {
@@ -203,7 +139,7 @@ public class MapManager {
             }
         }
 
-        // 4. Second Pass: Filter the border candidates topologically!
+        // 3. Second Pass: Filter the border candidates topologically!
         for (DelaunayTriangle candidate : borderCandidates) {
             boolean sharesEdgeWithInterior = false;
 
@@ -226,12 +162,67 @@ public class MapManager {
             }
         }
 
-        // 5. Update the map's active navmesh list
+        // 4. Update the map's active navmesh list
         this.navMeshTriangles = survivingTriangles;
 
         System.out.println("Removed " + removedTriangles.size + " triangles. " + survivingTriangles.size + " remain.");
 
         return removedTriangles;
+    }
+
+    /**
+     * Finds all navmesh triangles that intersect with a given rectangular footprint,
+     * expanded or shrunk by a specific buffer amount.
+     * * @param x The world x-coordinate of the footprint's bottom-left corner.
+     * @param y The world y-coordinate of the footprint's bottom-left corner.
+     * @param width The width of the footprint.
+     * @param height The height of the footprint.
+     * @param buffer The amount to expand (positive) or shrink (negative) the footprint.
+     * @return An Array containing all DelaunayTriangles that intersect the buffered footprint.
+     */
+    public Array<DelaunayTriangle> getIntersectingTriangles(float x, float y, float width, float height, float buffer) {
+        Array<DelaunayTriangle> intersectingTriangles = new Array<>();
+
+        if (navMeshTriangles == null || navMeshTriangles.isEmpty()) {
+            return intersectingTriangles;
+        }
+
+        // Apply the buffer to the footprint bounds
+        float minX = x - buffer;
+        float minY = y - buffer;
+        float maxX = x + width + buffer;
+        float maxY = y + height + buffer;
+
+        // Create a LibGDX Polygon for the buffered footprint
+        float[] footprintVertices = new float[] {
+            minX, minY,
+            maxX, minY,
+            maxX, maxY,
+            minX, maxY
+        };
+        com.badlogic.gdx.math.Polygon footprintPoly = new com.badlogic.gdx.math.Polygon(footprintVertices);
+
+        // Pre-allocate a polygon to reuse for each triangle to avoid garbage collection overhead
+        float[] triVertices = new float[6];
+        com.badlogic.gdx.math.Polygon triPoly = new com.badlogic.gdx.math.Polygon(triVertices);
+
+        // Loop through the navmesh and test for intersection
+        for (DelaunayTriangle tri : navMeshTriangles) {
+            triVertices[0] = tri.points[0].getXf();
+            triVertices[1] = tri.points[0].getYf();
+            triVertices[2] = tri.points[1].getXf();
+            triVertices[3] = tri.points[1].getYf();
+            triVertices[4] = tri.points[2].getXf();
+            triVertices[5] = tri.points[2].getYf();
+            triPoly.setVertices(triVertices);
+
+            // Check if the footprint overlaps this specific triangle
+            if (Intersector.overlapConvexPolygons(footprintPoly, triPoly)) {
+                intersectingTriangles.add(tri);
+            }
+        }
+
+        return intersectingTriangles;
     }
 
     /**
@@ -358,7 +349,7 @@ public class MapManager {
         }
 
         // 2. Cut the hole in the NavMesh
-        Array<DelaunayTriangle> removed = removeIntersectingTriangles(worldX, worldY, worldWidth, worldHeight);
+        Array<DelaunayTriangle> removed = removeBuildingIntersectingTriangles(worldX, worldY, worldWidth, worldHeight);
 
         Array<DelaunayTriangle> survivingBorderTriangles = new Array<>();
         Array<Vector2[]> boundaryEdges = extractPerimeterEdges(removed, survivingBorderTriangles);
