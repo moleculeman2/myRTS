@@ -2,6 +2,7 @@ package com.myrts.map;
 
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
+import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.utils.Array;
 import org.poly2tri.triangulation.TriangulationPoint;
 import org.poly2tri.triangulation.delaunay.DelaunayTriangle;
@@ -16,15 +17,16 @@ public class NavMeshRenderer {
      * * @param shapeRenderer The ShapeRenderer to use for drawing.
      *
      * @param triangles The list of DelaunayTriangle objects to draw.
+     * @param color
      */
-    public static void drawDelaunay(ShapeRenderer shapeRenderer, Array<DelaunayTriangle> triangles) {
+    public static void drawDelaunay(ShapeRenderer shapeRenderer, Array<DelaunayTriangle> triangles, Color color) {
         if (triangles == null || triangles.isEmpty()) {
             return; // Nothing to draw
         }
 
         // We no longer call begin() here!
 
-        shapeRenderer.setColor(Color.CYAN);
+        shapeRenderer.setColor(color);
 
         // Loop through each triangle and draw its three edges
         for (DelaunayTriangle tri : triangles) {
@@ -107,6 +109,32 @@ public class NavMeshRenderer {
                 shapeRenderer.line(cx - spacing, cy - halfLength, cx - spacing, cy + halfLength);
                 shapeRenderer.line(cx, cy - halfLength, cx, cy + halfLength);
                 shapeRenderer.line(cx + spacing, cy - halfLength, cx + spacing, cy + halfLength);
+            }
+        }
+    }
+
+    /**
+     * Draws a list of edges as green line segments.
+     * Ensure that shapeRenderer.begin(ShapeType.Line) has been called before using this.
+     *
+     * @param shapeRenderer The ShapeRenderer to use for drawing.
+     * @param edges The list of edges to draw, where each edge is an array of two Vector2 points.
+     */
+    public static void drawEdges(ShapeRenderer shapeRenderer, Array<Vector2[]> edges) {
+        if (edges == null || edges.isEmpty()) {
+            return; // Nothing to draw
+        }
+
+        shapeRenderer.setColor(Color.GREEN);
+
+        for (Vector2[] edge : edges) {
+            // Ensure the edge is valid and contains at least a start and end point
+            if (edge != null && edge.length >= 2) {
+                Vector2 p1 = edge[0];
+                Vector2 p2 = edge[1];
+
+                // Draw the line segment
+                shapeRenderer.line(p1.x, p1.y, p2.x, p2.y);
             }
         }
     }

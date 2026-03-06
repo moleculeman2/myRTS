@@ -35,9 +35,13 @@ public class MapManager {
     private int tileHeight;
     private boolean[][] collisionMap;
     private Array<DelaunayTriangle> navMeshTriangles;
+    public Array<DelaunayTriangle> dTriangles;
+    public Array<Vector2[]> dEdges;
 
     public MapManager(String mapFilePath) {
         loadMap(mapFilePath);
+        this.dTriangles = new Array<>();
+        this.dEdges = new Array<>();
     }
 
     public void loadMap(String mapFilePath) {
@@ -399,14 +403,193 @@ public class MapManager {
         int tilesW = (int) (worldWidth / getTileWidth());
         int tilesH = (int) (worldHeight / getTileHeight());
 
+        float tileW = getTileWidth();
+        float tileH = getTileHeight();
+
+        Array<Vector2[]> openEdges = new Array<>();
+        Array<Vector2[]> blockedEdges = new Array<>();
+
+        // 1. Identify the perimeter edges before freeing the tiles
+        for (int x = 0; x < tilesW; x++) {
+            for (int y = 0; y < tilesH; y++) {
+                int currentTileX = startTileX + x;
+                int currentTileY = startTileY + y;
+
+                // Check Left Neighbor
+                if (x == 0) {
+                    int nx = currentTileX - 1;
+                    int ny = currentTileY;
+                    Vector2 p1 = new Vector2(currentTileX * tileW, currentTileY * tileH);
+                    Vector2 p2 = new Vector2(currentTileX * tileW, (currentTileY + 1) * tileH);
+
+                    if (isCollision(nx, ny)) blockedEdges.add(new Vector2[]{p1, p2});
+                    else openEdges.add(new Vector2[]{p1, p2});
+                }
+
+                // Check Right Neighbor
+                if (x == tilesW - 1) {
+                    int nx = currentTileX + 1;
+                    int ny = currentTileY;
+                    Vector2 p1 = new Vector2((currentTileX + 1) * tileW, currentTileY * tileH);
+                    Vector2 p2 = new Vector2((currentTileX + 1) * tileW, (currentTileY + 1) * tileH);
+
+                    if (isCollision(nx, ny)) blockedEdges.add(new Vector2[]{p1, p2});
+                    else openEdges.add(new Vector2[]{p1, p2});
+                }
+
+                // Check Bottom Neighbor
+                if (y == 0) {
+                    int nx = currentTileX;
+                    int ny = currentTileY - 1;
+                    Vector2 p1 = new Vector2(currentTileX * tileW, currentTileY * tileH);
+                    Vector2 p2 = new Vector2((currentTileX + 1) * tileW, currentTileY * tileH);
+
+                    if (isCollision(nx, ny)) blockedEdges.add(new Vector2[]{p1, p2});
+                    else openEdges.add(new Vector2[]{p1, p2});
+                }
+
+                // Check Top Neighbor
+                if (y == tilesH - 1) {
+                    int nx = currentTileX;
+                    int ny = currentTileY + 1;
+                    Vector2 p1 = new Vector2(currentTileX * tileW, (currentTileY + 1) * tileH);
+                    Vector2 p2 = new Vector2((currentTileX + 1) * tileW, (currentTileY + 1) * tileH);
+
+                    if (isCollision(nx, ny)) blockedEdges.add(new Vector2[]{p1, p2});
+                    else openEdges.add(new Vector2[]{p1, p2});
+                }
+            }
+        }
+
+        // 2. Free up the collision grid
         for (int x = 0; x < tilesW; x++) {
             for (int y = 0; y < tilesH; y++) {
                 setTileBlocked(startTileX + x, startTileY + y, false);
             }
         }
 
-        System.out.println("Freed tiles for destroyed building at " + startTileX + ", " + startTileY);
+        // 3. Merge collinear edges
+        openEdges = mergeCollinearEdges(openEdges);
+        blockedEdges = mergeCollinearEdges(blockedEdges);
+
+        // 4. Find intersecting triangles and identify ones sharing blocked edges
+        Array<DelaunayTriangle> intersectingTriangles = getIntersectingTriangles(worldX, worldY, worldWidth, worldHeight, 0.1f);
+        Array<DelaunayTriangle> deletedTriangles = new Array<>();
+
+        float epsilon = 0.1f;
+
+        System.out.println("triangles found: " + intersectingTriangles.size);
+
+        for (DelaunayTriangle tri : intersectingTriangles) {
+            int matchCount = 0;
+
+            // Loop through each vertex on that triangle
+            for (int i = 0; i < 3; i++) {
+                matchCount = 0;
+                float tx = tri.points[i].getXf();
+                float ty = tri.points[i].getYf();
+                // Loop through blockedEdges to check for a vertex match
+                for (Vector2[] edge : blockedEdges) {
+                    if (edge[0].epsilonEquals(tx, ty, epsilon) || edge[1].epsilonEquals(tx, ty, epsilon)) {
+                        matchCount++;
+                        if (matchCount == 2) {
+                            deletedTriangles.add(tri);
+                        }
+                    }
+                }
+            }
+        }
+
+        System.out.println("Identified " + deletedTriangles.size + " triangles to delete based on blocked edges.");
+        intersectingTriangles.removeAll(deletedTriangles, false);
+
+        this.dTriangles.addAll(deletedTriangles);
+
+        Array<DelaunayTriangle> outBorderTriangles = new Array<>();
+        Array<Vector2[]> boundaryEdges = extractPerimeterEdges(intersectingTriangles, outBorderTriangles);
+        boundaryEdges.addAll(blockedEdges);
+        boundaryEdges.removeAll(openEdges, false);
+        Array<Vector2[]> toRemove = new Array<>();
+        for (Vector2[] edge : boundaryEdges){
+            for (Vector2[] oEdge : openEdges){
+                if (edge[0].epsilonEquals(oEdge[0], 0.1f) && edge[1].epsilonEquals(oEdge[1], 0.1f)){
+                    toRemove.add(edge);
+                    System.out.println("found equal edge");
+                }
+                else if (edge[0].epsilonEquals(oEdge[1], 0.1f) && edge[1].epsilonEquals(oEdge[0], 0.1f)){
+                    toRemove.add(edge);
+                    System.out.println("found equal edge2");
+                }
+            }
+        }
+        boundaryEdges.removeAll(toRemove, false);
+        this.dEdges.addAll(boundaryEdges);
+
+        List<List<ContourTracer.Point>> polygons = ContourTracer.assemblePolygons(boundaryEdges);
+
+        if (polygons.size() > 0) {
+            System.out.println("Successfully assembled " + polygons.size() + " perimeter polygons!");
+        }
+
         // TODO: Future NavMesh remeshing logic goes here
+    }
+
+    /**
+     * Takes an Array of line segments and continuously merges any segments that
+     * share an endpoint and travel in the same direction (collinear).
+     */
+    private Array<Vector2[]> mergeCollinearEdges(Array<Vector2[]> edges) {
+        boolean mergedAny = true;
+        float epsilon = 0.001f; // Account for floating point inaccuracies
+
+        while (mergedAny) {
+            mergedAny = false;
+
+            for (int i = 0; i < edges.size; i++) {
+                for (int j = i + 1; j < edges.size; j++) {
+                    Vector2[] e1 = edges.get(i);
+                    Vector2[] e2 = edges.get(j);
+
+                    Vector2 sharedPoint = null;
+                    Vector2 p1 = null;
+                    Vector2 p2 = null;
+
+                    // Find if they share an exact endpoint
+                    if (e1[0].epsilonEquals(e2[0], epsilon)) {
+                        sharedPoint = e1[0]; p1 = e1[1]; p2 = e2[1];
+                    } else if (e1[0].epsilonEquals(e2[1], epsilon)) {
+                        sharedPoint = e1[0]; p1 = e1[1]; p2 = e2[0];
+                    } else if (e1[1].epsilonEquals(e2[0], epsilon)) {
+                        sharedPoint = e1[1]; p1 = e1[0]; p2 = e2[1];
+                    } else if (e1[1].epsilonEquals(e2[1], epsilon)) {
+                        sharedPoint = e1[1]; p1 = e1[0]; p2 = e2[0];
+                    }
+
+                    // If they touch, check if they form a straight line
+                    if (sharedPoint != null) {
+                        // Calculate cross product to check collinearity
+                        float dx1 = sharedPoint.x - p1.x;
+                        float dy1 = sharedPoint.y - p1.y;
+                        float dx2 = p2.x - sharedPoint.x;
+                        float dy2 = p2.y - sharedPoint.y;
+
+                        float crossProduct = (dx1 * dy2) - (dy1 * dx2);
+
+                        if (Math.abs(crossProduct) < epsilon) {
+                            // They are collinear! Remove the two small segments and add the merged one
+                            edges.removeIndex(j); // Remove highest index first so 'i' doesn't shift unexpectedly
+                            edges.removeIndex(i);
+                            edges.add(new Vector2[]{p1, p2});
+
+                            mergedAny = true;
+                            break; // Break inner loop and restart to prevent index out of bounds
+                        }
+                    }
+                }
+                if (mergedAny) break; // Break outer loop to restart from the beginning
+            }
+        }
+        return edges;
     }
 
     public void createEntitiesFromMap(Engine engine) {
