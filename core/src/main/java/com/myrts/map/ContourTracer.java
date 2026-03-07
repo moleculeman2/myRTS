@@ -262,7 +262,7 @@ public class ContourTracer {
      * @param path The list of points representing the polygon loop.
      * @return A new list of points with redundant vertices removed.
      */
-    private static List<Point> simplifyPolygon(List<Point> path) {
+    public static List<Point> simplifyPolygon(List<Point> path) {
         if (path.size() < 3) {
             return path;
         }

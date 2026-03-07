@@ -3,6 +3,7 @@ package com.myrts.map;
 import org.locationtech.jts.geom.*;
 import org.locationtech.jts.precision.GeometryPrecisionReducer;
 import org.poly2tri.geometry.polygon.PolygonPoint;
+import org.poly2tri.triangulation.delaunay.DelaunayTriangle;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -96,6 +97,64 @@ public class NavMeshClipper {
         }
 
         return p2tPolygons;
+    }
+
+    /**
+     * Merges the building footprint and all provided intersected triangles into a single
+     * Poly2Tri Polygon, ensuring that coordinates are snapped to the grid to avoid
+     * floating-point inaccuracies.
+     */
+    public static org.poly2tri.geometry.polygon.Polygon mergeTrianglesAndBuilding(
+        com.badlogic.gdx.utils.Array<DelaunayTriangle> intersectedTriangles,
+        float bX, float bY, float bW, float bH) {
+
+        List<Geometry> polygonsToMerge = new ArrayList<>();
+
+        // 1. Make a polygon from the building footprint info
+        Coordinate[] buildingCoords = new Coordinate[] {
+            new Coordinate(bX, bY),
+            new Coordinate(bX + bW, bY),
+            new Coordinate(bX + bW, bY + bH),
+            new Coordinate(bX, bY + bH),
+            new Coordinate(bX, bY) // Close the loop
+        };
+        Polygon buildingPoly = geoFactory.createPolygon(buildingCoords);
+        polygonsToMerge.add(precisionReducer.reduce(buildingPoly).buffer(0));
+
+        // 2. Make polygons from each triangle
+        for (DelaunayTriangle tri : intersectedTriangles) {
+            Coordinate[] triCoords = new Coordinate[] {
+                new Coordinate(tri.points[0].getX(), tri.points[0].getY()),
+                new Coordinate(tri.points[1].getX(), tri.points[1].getY()),
+                new Coordinate(tri.points[2].getX(), tri.points[2].getY()),
+                new Coordinate(tri.points[0].getX(), tri.points[0].getY()) // Close the loop
+            };
+            Polygon triPoly = geoFactory.createPolygon(triCoords);
+            polygonsToMerge.add(precisionReducer.reduce(triPoly).buffer(0));
+        }
+
+        // 3. Merge them all together into one single polygon
+        // Using GeometryCollection's union() combines multiple geometries safely and efficiently
+        GeometryCollection geometryCollection = geoFactory.createGeometryCollection(
+            polygonsToMerge.toArray(new Geometry[0])
+        );
+        Geometry mergedGeometry = geometryCollection.union();
+
+        // 4. Snap to the grid to resolve floating point nonsense
+        mergedGeometry = precisionReducer.reduce(mergedGeometry).buffer(0);
+
+        // 5. Convert back to Poly2Tri polygon format
+        if (mergedGeometry instanceof Polygon) {
+            return convertToPoly2Tri((Polygon) mergedGeometry);
+        } else if (mergedGeometry instanceof MultiPolygon && mergedGeometry.getNumGeometries() > 0) {
+            // A MultiPolygon means there was a disconnect in the merged shapes.
+            // Returning the first (or largest) polygon prevents a crash.
+            System.err.println("Warning: Merged geometry resulted in a MultiPolygon. Returning the first polygon part.");
+            return convertToPoly2Tri((Polygon) mergedGeometry.getGeometryN(0));
+        }
+
+        System.err.println("Warning: Failed to generate a valid merged polygon.");
+        return null;
     }
 
     private static org.poly2tri.geometry.polygon.Polygon convertToPoly2Tri(Polygon jtsPolygon) {
