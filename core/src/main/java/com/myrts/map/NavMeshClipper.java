@@ -101,8 +101,7 @@ public class NavMeshClipper {
 
     /**
      * Merges the building footprint and all provided intersected triangles into a single
-     * Poly2Tri Polygon, ensuring that coordinates are snapped to the grid to avoid
-     * floating-point inaccuracies.
+     * Poly2Tri Polygon, snapped to the grid, with collinear vertices removed.
      */
     public static org.poly2tri.geometry.polygon.Polygon mergeTrianglesAndBuilding(
         com.badlogic.gdx.utils.Array<DelaunayTriangle> intersectedTriangles,
@@ -134,7 +133,6 @@ public class NavMeshClipper {
         }
 
         // 3. Merge them all together into one single polygon
-        // Using GeometryCollection's union() combines multiple geometries safely and efficiently
         GeometryCollection geometryCollection = geoFactory.createGeometryCollection(
             polygonsToMerge.toArray(new Geometry[0])
         );
@@ -143,18 +141,69 @@ public class NavMeshClipper {
         // 4. Snap to the grid to resolve floating point nonsense
         mergedGeometry = precisionReducer.reduce(mergedGeometry).buffer(0);
 
-        // 5. Convert back to Poly2Tri polygon format
+        // 5. Convert back to Poly2Tri polygon format, cleaning collinear points along the way
         if (mergedGeometry instanceof Polygon) {
-            return convertToPoly2Tri((Polygon) mergedGeometry);
+            return convertToCleanPoly2Tri((Polygon) mergedGeometry);
         } else if (mergedGeometry instanceof MultiPolygon && mergedGeometry.getNumGeometries() > 0) {
-            // A MultiPolygon means there was a disconnect in the merged shapes.
-            // Returning the first (or largest) polygon prevents a crash.
             System.err.println("Warning: Merged geometry resulted in a MultiPolygon. Returning the first polygon part.");
-            return convertToPoly2Tri((Polygon) mergedGeometry.getGeometryN(0));
+            return convertToCleanPoly2Tri((Polygon) mergedGeometry.getGeometryN(0));
         }
 
         System.err.println("Warning: Failed to generate a valid merged polygon.");
         return null;
+    }
+
+    /**
+     * Converts a JTS Polygon to Poly2Tri while stripping out any collinear boundary points.
+     */
+    private static org.poly2tri.geometry.polygon.Polygon convertToCleanPoly2Tri(Polygon jtsPolygon) {
+        Coordinate[] outerCoords = jtsPolygon.getExteriorRing().getCoordinates();
+        List<PolygonPoint> p2tOuter = removeCollinearVertices(outerCoords);
+
+        org.poly2tri.geometry.polygon.Polygon p2tPoly = new org.poly2tri.geometry.polygon.Polygon(p2tOuter);
+
+        for (int i = 0; i < jtsPolygon.getNumInteriorRing(); i++) {
+            Coordinate[] holeCoords = jtsPolygon.getInteriorRingN(i).getCoordinates();
+            List<PolygonPoint> p2tHole = removeCollinearVertices(holeCoords);
+
+            // Only add the hole if it still has enough points to be a valid polygon
+            if (p2tHole.size() >= 3) {
+                p2tPoly.addHole(new org.poly2tri.geometry.polygon.Polygon(p2tHole));
+            }
+        }
+
+        return p2tPoly;
+    }
+
+    /**
+     * Iterates through a JTS Coordinate array (closed loop) and strips out vertices
+     * that lie flatly on the line segment between their neighbors.
+     */
+    private static List<PolygonPoint> removeCollinearVertices(Coordinate[] coords) {
+        List<PolygonPoint> cleanedPoints = new ArrayList<>();
+        // JTS loops end with a duplicate of the start point. We ignore the duplicate for our checks.
+        int pointCount = coords.length - 1;
+
+        if (pointCount < 3) return cleanedPoints; // Failsafe
+
+        for (int i = 0; i < pointCount; i++) {
+            // Get Previous, Current, and Next points, wrapping around the index safely
+            Coordinate prev = coords[(i - 1 + pointCount) % pointCount];
+            Coordinate curr = coords[i];
+            Coordinate next = coords[(i + 1) % pointCount];
+
+            // Cross-product math to check for collinearity
+            // If the area of the triangle formed by these 3 points is 0, they are collinear.
+            double crossProduct = (curr.x - prev.x) * (next.y - curr.y) - (curr.y - prev.y) * (next.x - curr.x);
+
+            // Use a tiny epsilon instead of exactly 0 to account for floating-point drift
+            // from the buffer operations, even when snapped.
+            if (Math.abs(crossProduct) > 0.0001f) {
+                cleanedPoints.add(new PolygonPoint(curr.x, curr.y));
+            }
+        }
+
+        return cleanedPoints;
     }
 
     private static org.poly2tri.geometry.polygon.Polygon convertToPoly2Tri(Polygon jtsPolygon) {
