@@ -28,6 +28,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static com.myrts.map.ContourTracer.simplifyPolygon;
+import static com.myrts.map.NavMeshClipper.mergeTrianglesAndBuilding;
 
 public class MapManager {
 
@@ -506,84 +507,16 @@ public class MapManager {
 
         System.out.println("Identified " + prunedTriangles.size + " triangles to delete based on blocked edges.");
         intersectedTriangles.removeAll(prunedTriangles, false);
-        this.navMeshTriangles.removeAll(intersectedTriangles, false);
         this.dTriangles.addAll(prunedTriangles);
-
         Array<DelaunayTriangle> outBorderTriangles = new Array<>();
-        Array<Vector2[]> boundaryEdges = extractPerimeterEdges(intersectedTriangles, outBorderTriangles);
-        boundaryEdges.addAll(blockedEdges);
-        boundaryEdges.removeAll(openEdges, false);
-        Array<Vector2[]> toRemove = new Array<>();
-        for (Vector2[] edge : boundaryEdges){
-            for (Vector2[] oEdge : openEdges){
-                if (edge[0].epsilonEquals(oEdge[0], 0.1f) && edge[1].epsilonEquals(oEdge[1], 0.1f)){
-                    toRemove.add(edge);
-                    System.out.println("found equal edge");
-                }
-                else if (edge[0].epsilonEquals(oEdge[1], 0.1f) && edge[1].epsilonEquals(oEdge[0], 0.1f)){
-                    toRemove.add(edge);
-                    System.out.println("found equal edge2");
-                }
-            }
-        }
-        boundaryEdges.removeAll(toRemove, false);
+        extractPerimeterEdges(intersectedTriangles,outBorderTriangles);
+
+
         System.out.println("intersected: " + intersectedTriangles);
         this.navMeshTriangles.removeAll(intersectedTriangles, false);
 
-
-        // TODO: before we assemble polygons, need to get rid of edges that stick into the boundary area.
-        //Some sort of collinear check that sees if any boundary edges share a vertex with an open edge.
-        //then do some math to see if that boundary edge is bigger than the open edge. If it is, we cut off part of it.
-        //We'd do that by setting the vertex that's closest to the open edge to the vertex of the open edge that
-        //is closest to the boundary edge.
-        toRemove.clear();
-        Array<Vector2[]> toAdd = new Array<>();
-        for (Vector2[] edgeA : boundaryEdges){
-            for (Vector2[] edgeB : openEdges) {
-                Vector2[] result = subtractEdge(edgeA, edgeB);
-                if (result != null) {
-                    if (result.length == 0) {
-                        toRemove.add(result);
-                    } else {
-                        toAdd.add(result);
-                    }
-                }
-            }
-        }
-        boundaryEdges.removeAll(toRemove, false);
-        boundaryEdges.addAll(toAdd);
-
-        this.dEdges.clear();
-        this.dEdges.addAll(boundaryEdges);
-
-        List<List<ContourTracer.Point>> polygons = ContourTracer.assemblePolygons(boundaryEdges);
-        List<List<ContourTracer.Point>> simplifiedPolygons = new ArrayList<>();
-
-        for (List<ContourTracer.Point> list : polygons){
-            simplifiedPolygons.add(simplifyPolygon(list));
-        }
-
-        if (polygons.size() > 0) {
-            System.out.println("Successfully assembled " + polygons.size() + " perimeter polygons!");
-        }
-
         List<Polygon> p2tPolygons = new ArrayList<>();
-        for (List<ContourTracer.Point> cavityPath : simplifiedPolygons) {
-            // Poly2Tri requires at least 3 points to form a valid polygon
-            if (cavityPath.size() >= 3) {
-                List<PolygonPoint> p2tPoints = new ArrayList<>();
-
-                for (ContourTracer.Point pt : cavityPath) {
-                    // Convert your integer points back to doubles for Poly2Tri
-                    p2tPoints.add(new PolygonPoint(pt.x, pt.y));
-                }
-
-                Polygon p2tPolygon = new Polygon(p2tPoints);
-                p2tPolygons.add(p2tPolygon);
-            } else {
-                System.err.println("Warning: Assembled polygon has fewer than 3 points, skipping.");
-            }
-        }
+        p2tPolygons.add(mergeTrianglesAndBuilding(intersectedTriangles, worldX, worldY, worldWidth, worldHeight));
 
         Array<DelaunayTriangle> freshlyGeneratedTriangles = new Array<>();
 
@@ -612,76 +545,6 @@ public class MapManager {
         } else {
             System.out.println("No stitching required or missing triangles.");
         }
-
-
-        // TODO: Future NavMesh remeshing logic goes here
-    }
-
-    /**
-     * Subtracts the overlapping area of edgeA from edgeB (edgeB - edgeA).
-     * Assumes edgeA does not cut perfectly through the middle of edgeB.
-     * * @return A new shortened edgeB, an empty array if edgeB is completely consumed,
-     * or null if they don't overlap in a way that trims edgeB.
-     */
-    private Vector2[] subtractEdge(Vector2[] edgeA, Vector2[] edgeB) {
-        float epsilon = 0.001f;
-
-        Vector2 a1 = edgeA[0], a2 = edgeA[1];
-        Vector2 b1 = edgeB[0], b2 = edgeB[1];
-
-        // 1. Check which endpoints of B are "covered" by A
-        boolean b1InA = isPointOnSegment(b1, a1, a2, epsilon);
-        boolean b2InA = isPointOnSegment(b2, a1, a2, epsilon);
-
-        // Case A: edgeB is completely swallowed by edgeA
-        if (b1InA && b2InA) {
-            return new Vector2[0];
-        }
-
-        // Case B: No overlap at the tips (or no overlap at all)
-        if (!b1InA && !b2InA) {
-            return null; // edgeB remains perfectly intact
-        }
-
-        // Case C: Partial overlap at one tip. Let's find out what survives!
-        Vector2 survivingB = b1InA ? b2 : b1;
-        Vector2 deadB      = b1InA ? b1 : b2;
-
-        // Find which endpoint of A marks the "cut" on B
-        boolean a1InB = isPointOnSegment(a1, b1, b2, epsilon);
-        boolean a2InB = isPointOnSegment(a2, b1, b2, epsilon);
-
-        Vector2 trimPoint;
-
-        if (a1InB && a2InB) {
-            // edgeA is completely inside edgeB (anchored at one tip).
-            // The cut point is whichever end of A isn't sitting on the dead B tip.
-            trimPoint = a1.epsilonEquals(deadB, epsilon) ? a2 : a1;
-        } else if (a1InB) {
-            trimPoint = a1;
-        } else if (a2InB) {
-            trimPoint = a2;
-        } else {
-            return null; // Fallback for floating point weirdness
-        }
-
-        // Final safety check: Did the trim reduce the edge to a length of 0?
-        if (trimPoint.epsilonEquals(survivingB, epsilon)) {
-            return new Vector2[0];
-        }
-
-        // Return the freshly trimmed edge!
-        return new Vector2[]{trimPoint, survivingB};
-    }
-
-    /**
-     * Helper to verify if a point rests exactly on a line segment.
-     */
-    private boolean isPointOnSegment(Vector2 p, Vector2 end1, Vector2 end2, float epsilon) {
-        float totalDist = end1.dst(end2);
-        float part1 = end1.dst(p);
-        float part2 = end2.dst(p);
-        return Math.abs((part1 + part2) - totalDist) <= epsilon;
     }
 
     /**
