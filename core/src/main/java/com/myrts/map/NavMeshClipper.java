@@ -1,5 +1,7 @@
 package com.myrts.map;
 
+import com.badlogic.gdx.math.Vector2;
+import com.badlogic.gdx.utils.Array;
 import org.locationtech.jts.geom.*;
 import org.locationtech.jts.precision.GeometryPrecisionReducer;
 import org.poly2tri.geometry.polygon.PolygonPoint;
@@ -105,7 +107,7 @@ public class NavMeshClipper {
      */
     public static org.poly2tri.geometry.polygon.Polygon mergeTrianglesAndBuilding(
         com.badlogic.gdx.utils.Array<DelaunayTriangle> intersectedTriangles,
-        float bX, float bY, float bW, float bH) {
+        float bX, float bY, float bW, float bH, Array<Vector2> protectedVertices) {
 
         List<Geometry> polygonsToMerge = new ArrayList<>();
 
@@ -143,10 +145,10 @@ public class NavMeshClipper {
 
         // 5. Convert back to Poly2Tri polygon format, cleaning collinear points along the way
         if (mergedGeometry instanceof Polygon) {
-            return convertToCleanPoly2Tri((Polygon) mergedGeometry);
+            return convertToCleanPoly2Tri((Polygon) mergedGeometry, protectedVertices);
         } else if (mergedGeometry instanceof MultiPolygon && mergedGeometry.getNumGeometries() > 0) {
             System.err.println("Warning: Merged geometry resulted in a MultiPolygon. Returning the first polygon part.");
-            return convertToCleanPoly2Tri((Polygon) mergedGeometry.getGeometryN(0));
+            return convertToCleanPoly2Tri((Polygon) mergedGeometry.getGeometryN(0), protectedVertices);
         }
 
         System.err.println("Warning: Failed to generate a valid merged polygon.");
@@ -156,15 +158,16 @@ public class NavMeshClipper {
     /**
      * Converts a JTS Polygon to Poly2Tri while stripping out any collinear boundary points.
      */
-    private static org.poly2tri.geometry.polygon.Polygon convertToCleanPoly2Tri(Polygon jtsPolygon) {
+    private static org.poly2tri.geometry.polygon.Polygon convertToCleanPoly2Tri
+    (Polygon jtsPolygon, Array<Vector2> protectedVertices) {
         Coordinate[] outerCoords = jtsPolygon.getExteriorRing().getCoordinates();
-        List<PolygonPoint> p2tOuter = removeCollinearVertices(outerCoords);
+        List<PolygonPoint> p2tOuter = removeCollinearVertices(outerCoords, protectedVertices);
 
         org.poly2tri.geometry.polygon.Polygon p2tPoly = new org.poly2tri.geometry.polygon.Polygon(p2tOuter);
 
         for (int i = 0; i < jtsPolygon.getNumInteriorRing(); i++) {
             Coordinate[] holeCoords = jtsPolygon.getInteriorRingN(i).getCoordinates();
-            List<PolygonPoint> p2tHole = removeCollinearVertices(holeCoords);
+            List<PolygonPoint> p2tHole = removeCollinearVertices(holeCoords, protectedVertices);
 
             // Only add the hole if it still has enough points to be a valid polygon
             if (p2tHole.size() >= 3) {
@@ -179,26 +182,40 @@ public class NavMeshClipper {
      * Iterates through a JTS Coordinate array (closed loop) and strips out vertices
      * that lie flatly on the line segment between their neighbors.
      */
-    private static List<PolygonPoint> removeCollinearVertices(Coordinate[] coords) {
+    private static List<PolygonPoint> removeCollinearVertices(Coordinate[] coords, Array<Vector2> protectedVertices) {
+
         List<PolygonPoint> cleanedPoints = new ArrayList<>();
-        // JTS loops end with a duplicate of the start point. We ignore the duplicate for our checks.
         int pointCount = coords.length - 1;
 
-        if (pointCount < 3) return cleanedPoints; // Failsafe
+        if (pointCount < 3) return cleanedPoints;
 
         for (int i = 0; i < pointCount; i++) {
-            // Get Previous, Current, and Next points, wrapping around the index safely
             Coordinate prev = coords[(i - 1 + pointCount) % pointCount];
             Coordinate curr = coords[i];
             Coordinate next = coords[(i + 1) % pointCount];
 
-            // Cross-product math to check for collinearity
-            // If the area of the triangle formed by these 3 points is 0, they are collinear.
+            // --- NEW: Check if this vertex is protected ---
+            boolean isProtected = false;
+            if (protectedVertices != null) {
+                for (Vector2 pt : protectedVertices) {
+                    // Use a small epsilon for floating point vs double comparisons
+                    if (Math.abs(pt.x - curr.x) < 0.001f && Math.abs(pt.y - curr.y) < 0.1f) {
+                        isProtected = true;
+                        break;
+                    }
+                }
+            }
+
+            // If it's a T-junction needed by the surrounding navmesh, KEEP IT.
+            if (isProtected) {
+                cleanedPoints.add(new PolygonPoint(curr.x, curr.y));
+                continue;
+            }
+
+            // Otherwise, do the normal collinear math to strip out useless points
             double crossProduct = (curr.x - prev.x) * (next.y - curr.y) - (curr.y - prev.y) * (next.x - curr.x);
 
-            // Use a tiny epsilon instead of exactly 0 to account for floating-point drift
-            // from the buffer operations, even when snapped.
-            if (Math.abs(crossProduct) > 0.0001f) {
+            if (Math.abs(crossProduct) > 0.001f) {
                 cleanedPoints.add(new PolygonPoint(curr.x, curr.y));
             }
         }

@@ -509,14 +509,32 @@ public class MapManager {
         intersectedTriangles.removeAll(prunedTriangles, false);
         this.dTriangles.addAll(prunedTriangles);
         Array<DelaunayTriangle> outBorderTriangles = new Array<>();
-        extractPerimeterEdges(intersectedTriangles,outBorderTriangles);
 
+        extractPerimeterEdges(intersectedTriangles,outBorderTriangles);
+        //EXTRACT all vertices that must be protected (the T-junctions!)
+        Array<Vector2> protectedVertices = new Array<>();
+        for (DelaunayTriangle survivingTri : outBorderTriangles) {
+            for (int i = 0; i < 3; i++) {
+                // If this edge has no neighbor, it means it's an exposed edge waiting
+                // for our new navmesh to stitch to it. These vertices MUST be protected.
+                if (survivingTri.neighbors[i] == null) {
+                    float p1x = survivingTri.points[(i + 1) % 3].getXf();
+                    float p1y = survivingTri.points[(i + 1) % 3].getYf();
+                    float p2x = survivingTri.points[(i + 2) % 3].getXf();
+                    float p2y = survivingTri.points[(i + 2) % 3].getYf();
+
+                    protectedVertices.add(new Vector2(p1x, p1y));
+                    protectedVertices.add(new Vector2(p2x, p2y));
+                }
+            }
+        }
 
         System.out.println("intersected: " + intersectedTriangles);
         this.navMeshTriangles.removeAll(intersectedTriangles, false);
 
         List<Polygon> p2tPolygons = new ArrayList<>();
-        p2tPolygons.add(mergeTrianglesAndBuilding(intersectedTriangles, worldX, worldY, worldWidth, worldHeight));
+        p2tPolygons.add(mergeTrianglesAndBuilding
+            (intersectedTriangles, worldX, worldY, worldWidth, worldHeight, protectedVertices));
 
         Array<DelaunayTriangle> freshlyGeneratedTriangles = new Array<>();
 
