@@ -54,6 +54,27 @@ public class EntityFactory {
         return building;
     }
 
+    public static Entity createGhostBuilding(Engine engine, BuildingType type) {
+        Entity ghost = engine.createEntity();
+
+        TransformComponent transform = engine.createComponent(TransformComponent.class);
+        // Position/Size will be updated every frame by the InputProcessor
+        ghost.add(transform);
+
+        SpriteComponent sprite = engine.createComponent(SpriteComponent.class);
+        sprite.region = getBuildingTexture(type);
+        sprite.zIndex = 2.0f; // Draw above normal buildings
+        sprite.color.a = 0.5f; // 50% transparent!
+        ghost.add(sprite);
+
+        GhostComponent ghostComp = engine.createComponent(GhostComponent.class);
+        ghostComp.blueprint = type;
+        ghost.add(ghostComp);
+
+        engine.addEntity(ghost);
+        return ghost;
+    }
+
     public static TextureRegion getBuildingTexture(BuildingType type) {
         if (type == null) return null;
         return buildingTextures.get(type);

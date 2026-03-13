@@ -4,6 +4,7 @@ import com.badlogic.ashley.core.ComponentMapper;
 import com.badlogic.ashley.core.Entity;
 import com.badlogic.ashley.core.Family;
 import com.badlogic.ashley.systems.SortedIteratingSystem;
+import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.myrts.components.SpriteComponent;
 import com.myrts.components.TransformComponent;
@@ -38,6 +39,7 @@ public class RenderSystem extends SortedIteratingSystem {
         float width = transform.width > 0 ? transform.width : sprite.region.getRegionWidth();
         float height = transform.height > 0 ? transform.height : sprite.region.getRegionHeight();
 
+        batch.setColor(sprite.color);
         batch.draw(
             sprite.region,
             transform.position.x,
@@ -45,6 +47,7 @@ public class RenderSystem extends SortedIteratingSystem {
             width,
             height
         );
+        batch.setColor(Color.WHITE);
     }
 
     private static class ZComparator implements Comparator<Entity> {

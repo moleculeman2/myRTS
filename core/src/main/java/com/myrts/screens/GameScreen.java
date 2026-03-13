@@ -71,37 +71,6 @@ public class GameScreen implements Screen {
         // Update Input (calculates ghost position)
         inputProcessor.update(delta);
 
-        // --- NEW: Render Ghost Building ---
-        if (inputProcessor.isPlacingMode()) {
-            BuildingType blueprint = inputProcessor.getCurrentBlueprint();
-
-            if (blueprint != null) {
-                // 1. Tell the batch we are about to start drawing!
-                game.batch.begin();
-
-                // Optional: Change batch color to red if canBuild is false, green/white if true
-                if (!inputProcessor.isCanBuild()) {
-                    game.batch.setColor(1, 0, 0, 0.5f); // Semi-transparent red
-                } else {
-                    game.batch.setColor(0, 1, 0, 0.5f); // Semi-transparent white
-                }
-
-                game.batch.draw(
-                    EntityFactory.getBuildingTexture(blueprint),
-                    inputProcessor.getGhostPos().x,
-                    inputProcessor.getGhostPos().y,
-                    inputProcessor.getGhostWidth(),
-                    inputProcessor.getGhostHeight()
-                );
-
-                // Reset color so other things don't draw transparently later
-                game.batch.setColor(1, 1, 1, 1);
-
-                // 2. Tell the batch we are done, flush it to the GPU!
-                game.batch.end();
-            }
-        }
-
         // Render Debug/NavMesh (Optional)
         shapeRenderer.setProjectionMatrix(camera.combined);
         shapeRenderer.begin(ShapeRenderer.ShapeType.Line);
@@ -111,7 +80,7 @@ public class GameScreen implements Screen {
         //NavMeshRenderer.drawCentroidLinks(shapeRenderer, mapManager.getNavMeshTriangles());
 
         NavMeshRenderer.drawEdges(shapeRenderer, mapManager.dEdges);
-        NavMeshRenderer.drawDelaunay(shapeRenderer, mapManager.dTriangles, Color.RED);
+        //NavMeshRenderer.drawDelaunay(shapeRenderer, mapManager.dTriangles, Color.RED);
 
         shapeRenderer.end();
     }

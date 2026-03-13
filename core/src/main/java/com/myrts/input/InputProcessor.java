@@ -13,6 +13,7 @@ import com.badlogic.gdx.math.Vector3;
 import com.myrts.blueprints.BuildingType;
 import com.myrts.components.BuildingComponent;
 import com.myrts.components.DestroyedComponent;
+import com.myrts.components.SpriteComponent;
 import com.myrts.components.TransformComponent;
 import com.myrts.entities.EntityFactory;
 import com.myrts.map.MapManager;
@@ -29,6 +30,7 @@ public class InputProcessor extends InputAdapter {
     // Placement Mode variables
     private boolean placingMode = false;
     private boolean canBuild = false;
+    private Entity ghostEntity = null;
     private Vector3 mouseWorldPos = new Vector3();
     private Vector2 ghostPos = new Vector2(); // The bottom-left world position of the ghost
 
@@ -40,26 +42,28 @@ public class InputProcessor extends InputAdapter {
         this.engine = engine;
     }
 
+
+
     @Override
     public boolean keyDown(int keycode) {
         if (keycode == Input.Keys.B) {
-            if (placingMode) placingMode = false;
-            else beginPlacingBuilding(BuildingType.BARRACKS);
+            if (placingMode) cancelPlacement();
+            beginPlacingBuilding(BuildingType.BARRACKS);
             return true;
         }
         if (keycode == Input.Keys.G) {
-            if (placingMode) placingMode = false;
-            else beginPlacingBuilding(BuildingType.GENERATOR);
+            if (placingMode) cancelPlacement();
+            beginPlacingBuilding(BuildingType.GENERATOR);
             return true;
         }
         if (keycode == Input.Keys.H) {
-            if (placingMode) placingMode = false;
-            else beginPlacingBuilding(BuildingType.HEADQUARTERS);
+            if (placingMode) cancelPlacement();
+            beginPlacingBuilding(BuildingType.HEADQUARTERS);
             return true;
         }
         if (keycode == Input.Keys.T) {
-            if (placingMode) placingMode = false;
-            else beginPlacingBuilding(BuildingType.TURRET);
+            if (placingMode) cancelPlacement();
+            beginPlacingBuilding(BuildingType.TURRET);
             return true;
         }
         if (keycode == Input.Keys.D) {
@@ -73,8 +77,9 @@ public class InputProcessor extends InputAdapter {
     public boolean touchDown(int screenX, int screenY, int pointer, int button) {
         if (button == 1) { // Right click
             if (placingMode) {
-                placingMode = false; // Right click cancels placement
-            } else {
+                cancelPlacement();// Right click cancels placement and destroys the ghost            } else {
+            }
+            else{
                 panning = true;
                 lastX = screenX;
                 lastY = screenY;
@@ -86,7 +91,6 @@ public class InputProcessor extends InputAdapter {
             if (placingMode) {
                 if (canBuild) {
                     placeBuilding();
-                    placingMode = false; // Exit mode after placement (optional)
                 }
                 return true; // Consume input
             }
@@ -138,43 +142,64 @@ public class InputProcessor extends InputAdapter {
     }
 
     private void updatePlacementLogic() {
-        if (currentBlueprint == null) return;
+        if (currentBlueprint == null || ghostEntity == null) return;
 
+        // 1. Get Mouse World Position
         mouseWorldPos.set(Gdx.input.getX(), Gdx.input.getY(), 0);
         camera.unproject(mouseWorldPos);
 
         float tileW = mapManager.getTileWidth();
         float tileH = mapManager.getTileHeight();
-
-        // Use dynamic dimensions
         float buildingWorldWidth = currentBlueprint.widthTiles * tileW;
         float buildingWorldHeight = currentBlueprint.heightTiles * tileH;
 
+        // 2. Calculate Center-Aligned Position
         float rawX = mouseWorldPos.x - (buildingWorldWidth / 2f);
         float rawY = mouseWorldPos.y - (buildingWorldHeight / 2f);
 
+        // 3. Snap to Grid
         int tileX = Math.round(rawX / tileW);
         int tileY = Math.round(rawY / tileH);
 
-        ghostPos.set(tileX * tileW, tileY * tileH);
+        float snappedX = tileX * tileW;
+        float snappedY = tileY * tileH;
 
-        // Update validity check with dynamic dimensions
+        // 4. Check Validity using MapManager
         canBuild = mapManager.canPlaceBuilding(tileX, tileY, currentBlueprint.widthTiles, currentBlueprint.heightTiles);
+
+        // --- NEW: Update the Ghost Entity Components directly! ---
+
+        // Update its position and size
+        TransformComponent transform = ghostEntity.getComponent(TransformComponent.class);
+        transform.position.set(snappedX, snappedY);
+        transform.width = buildingWorldWidth;
+        transform.height = buildingWorldHeight;
+
+        // Update its color based on if it can be built
+        SpriteComponent sprite = ghostEntity.getComponent(SpriteComponent.class);
+        if (canBuild) {
+            sprite.color.set(0f, 1f, 0f, 0.5f); // Semi-transparent white
+        } else {
+            sprite.color.set(1f, 0f, 0f, 0.5f); // Semi-transparent red
+        }
     }
 
     private void placeBuilding() {
-        float tileW = mapManager.getTileWidth();
-        float tileH = mapManager.getTileHeight();
+        if (!canBuild || currentBlueprint == null || ghostEntity == null) return;
 
-        // Use dynamic dimensions
-        float buildingWorldWidth = currentBlueprint.widthTiles * tileW;
-        float buildingWorldHeight = currentBlueprint.heightTiles * tileH;
+        // Read the final snapped position directly from our ghost entity!
+        TransformComponent transform = ghostEntity.getComponent(TransformComponent.class);
 
-        System.out.println("Placing building at world: " + ghostPos.x + ", " + ghostPos.y);
+        System.out.println("Placing building at world: " + transform.position.x + ", " + transform.position.y);
 
-        EntityFactory.createBuilding(engine, ghostPos.x, ghostPos.y, buildingWorldWidth, buildingWorldHeight, currentBlueprint);
+        // 1. Create real Entity
+        EntityFactory.createBuilding(engine, transform.position.x, transform.position.y, transform.width, transform.height, currentBlueprint);
 
-        mapManager.registerBuildingObstacle(ghostPos.x, ghostPos.y, buildingWorldWidth, buildingWorldHeight, currentBlueprint.widthTiles, currentBlueprint.heightTiles);
+        // 2. Delegate Map changes to MapManager
+        mapManager.registerBuildingObstacle(transform.position.x, transform.position.y, transform.width, transform.height, currentBlueprint.widthTiles, currentBlueprint.heightTiles);
+
+        // 3. Exit placement mode and destroy the ghost
+        cancelPlacement();
     }
 
     private void attemptBuildingDeletion() {
@@ -205,8 +230,25 @@ public class InputProcessor extends InputAdapter {
     }
 
     public void beginPlacingBuilding(BuildingType type) {
+        // If we are already placing something else, destroy the old ghost first!
+        if (placingMode && ghostEntity != null) {
+            engine.removeEntity(ghostEntity);
+        }
+
         this.currentBlueprint = type;
         this.placingMode = true;
+
+        // Ask the factory to spawn our new ECS ghost entity
+        this.ghostEntity = EntityFactory.createGhostBuilding(engine, type);
+    }
+
+    private void cancelPlacement() {
+        if (ghostEntity != null) {
+            engine.removeEntity(ghostEntity); // Remove the ghost from the game world
+            ghostEntity = null;
+        }
+        placingMode = false;
+        currentBlueprint = null;
     }
 
     // Getters for GameScreen rendering
