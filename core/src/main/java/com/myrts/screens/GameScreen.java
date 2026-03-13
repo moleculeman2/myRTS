@@ -8,6 +8,7 @@ import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.myrts.GameBase;
+import com.myrts.blueprints.BuildingType;
 import com.myrts.input.InputProcessor;
 import com.myrts.map.MapManager;
 import com.myrts.map.NavMeshRenderer;
@@ -72,26 +73,33 @@ public class GameScreen implements Screen {
 
         // --- NEW: Render Ghost Building ---
         if (inputProcessor.isPlacingMode()) {
-            game.batch.begin();
+            BuildingType blueprint = inputProcessor.getCurrentBlueprint();
 
-            // Set Color based on validity (Green or Red) with 50% opacity
-            if (inputProcessor.isCanBuild()) {
-                game.batch.setColor(0f, 1f, 0f, 0.5f);
-            } else {
-                game.batch.setColor(1f, 0f, 0f, 0.5f);
+            if (blueprint != null) {
+                // 1. Tell the batch we are about to start drawing!
+                game.batch.begin();
+
+                // Optional: Change batch color to red if canBuild is false, green/white if true
+                if (!inputProcessor.isCanBuild()) {
+                    game.batch.setColor(1, 0, 0, 0.5f); // Semi-transparent red
+                } else {
+                    game.batch.setColor(0, 1, 0, 0.5f); // Semi-transparent white
+                }
+
+                game.batch.draw(
+                    EntityFactory.getBuildingTexture(blueprint),
+                    inputProcessor.getGhostPos().x,
+                    inputProcessor.getGhostPos().y,
+                    inputProcessor.getGhostWidth(),
+                    inputProcessor.getGhostHeight()
+                );
+
+                // Reset color so other things don't draw transparently later
+                game.batch.setColor(1, 1, 1, 1);
+
+                // 2. Tell the batch we are done, flush it to the GPU!
+                game.batch.end();
             }
-
-            game.batch.draw(
-                EntityFactory.getBuildingTexture(),
-                inputProcessor.getGhostPos().x,
-                inputProcessor.getGhostPos().y,
-                inputProcessor.getGhostWidth(),
-                inputProcessor.getGhostHeight()
-            );
-
-            // Reset color to white so other things don't look weird
-            game.batch.setColor(Color.WHITE);
-            game.batch.end();
         }
 
         // Render Debug/NavMesh (Optional)

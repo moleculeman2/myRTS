@@ -10,6 +10,7 @@ import com.badlogic.gdx.InputAdapter;
 import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.math.Vector3;
+import com.myrts.blueprints.BuildingType;
 import com.myrts.components.BuildingComponent;
 import com.myrts.components.DestroyedComponent;
 import com.myrts.components.TransformComponent;
@@ -31,8 +32,7 @@ public class InputProcessor extends InputAdapter {
     private Vector3 mouseWorldPos = new Vector3();
     private Vector2 ghostPos = new Vector2(); // The bottom-left world position of the ghost
 
-    // Hardcoded building size for now (3x3)
-    private final int BUILDING_SIZE_TILES = 3;
+    private BuildingType currentBlueprint = null;
 
     public InputProcessor(OrthographicCamera camera, MapManager mapManager, Engine engine) {
         this.camera = camera;
@@ -43,7 +43,23 @@ public class InputProcessor extends InputAdapter {
     @Override
     public boolean keyDown(int keycode) {
         if (keycode == Input.Keys.B) {
-            placingMode = !placingMode; // Toggle mode
+            if (placingMode) placingMode = false;
+            else beginPlacingBuilding(BuildingType.BARRACKS);
+            return true;
+        }
+        if (keycode == Input.Keys.G) {
+            if (placingMode) placingMode = false;
+            else beginPlacingBuilding(BuildingType.GENERATOR);
+            return true;
+        }
+        if (keycode == Input.Keys.H) {
+            if (placingMode) placingMode = false;
+            else beginPlacingBuilding(BuildingType.HEADQUARTERS);
+            return true;
+        }
+        if (keycode == Input.Keys.T) {
+            if (placingMode) placingMode = false;
+            else beginPlacingBuilding(BuildingType.TURRET);
             return true;
         }
         if (keycode == Input.Keys.D) {
@@ -122,43 +138,43 @@ public class InputProcessor extends InputAdapter {
     }
 
     private void updatePlacementLogic() {
-        // 1. Get Mouse World Position
+        if (currentBlueprint == null) return;
+
         mouseWorldPos.set(Gdx.input.getX(), Gdx.input.getY(), 0);
         camera.unproject(mouseWorldPos);
 
         float tileW = mapManager.getTileWidth();
         float tileH = mapManager.getTileHeight();
-        float buildingWorldWidth = BUILDING_SIZE_TILES * tileW;
-        float buildingWorldHeight = BUILDING_SIZE_TILES * tileH;
 
-        // 2. Calculate Center-Aligned Position
+        // Use dynamic dimensions
+        float buildingWorldWidth = currentBlueprint.widthTiles * tileW;
+        float buildingWorldHeight = currentBlueprint.heightTiles * tileH;
+
         float rawX = mouseWorldPos.x - (buildingWorldWidth / 2f);
         float rawY = mouseWorldPos.y - (buildingWorldHeight / 2f);
 
-        // 3. Snap to Grid
         int tileX = Math.round(rawX / tileW);
         int tileY = Math.round(rawY / tileH);
 
-        // Calculate snapped world coordinates for rendering
         ghostPos.set(tileX * tileW, tileY * tileH);
 
-        // 4. Check Validity using MapManager
-        canBuild = mapManager.canPlaceBuilding(tileX, tileY, BUILDING_SIZE_TILES, BUILDING_SIZE_TILES);
+        // Update validity check with dynamic dimensions
+        canBuild = mapManager.canPlaceBuilding(tileX, tileY, currentBlueprint.widthTiles, currentBlueprint.heightTiles);
     }
 
     private void placeBuilding() {
         float tileW = mapManager.getTileWidth();
         float tileH = mapManager.getTileHeight();
-        float buildingWorldWidth = BUILDING_SIZE_TILES * tileW;
-        float buildingWorldHeight = BUILDING_SIZE_TILES * tileH;
+
+        // Use dynamic dimensions
+        float buildingWorldWidth = currentBlueprint.widthTiles * tileW;
+        float buildingWorldHeight = currentBlueprint.heightTiles * tileH;
 
         System.out.println("Placing building at world: " + ghostPos.x + ", " + ghostPos.y);
 
-        // 1. Create Entity in the Ashley ECS
-        EntityFactory.createBuilding(engine, ghostPos.x, ghostPos.y, buildingWorldWidth, buildingWorldHeight);
+        EntityFactory.createBuilding(engine, ghostPos.x, ghostPos.y, buildingWorldWidth, buildingWorldHeight, currentBlueprint);
 
-        // 2. Delegate Map changes to MapManager
-        mapManager.registerBuildingObstacle(ghostPos.x, ghostPos.y, buildingWorldWidth, buildingWorldHeight, BUILDING_SIZE_TILES, BUILDING_SIZE_TILES);
+        mapManager.registerBuildingObstacle(ghostPos.x, ghostPos.y, buildingWorldWidth, buildingWorldHeight, currentBlueprint.widthTiles, currentBlueprint.heightTiles);
     }
 
     private void attemptBuildingDeletion() {
@@ -188,10 +204,23 @@ public class InputProcessor extends InputAdapter {
         }
     }
 
+    public void beginPlacingBuilding(BuildingType type) {
+        this.currentBlueprint = type;
+        this.placingMode = true;
+    }
+
     // Getters for GameScreen rendering
     public boolean isPlacingMode() { return placingMode; }
     public boolean isCanBuild() { return canBuild; }
     public Vector2 getGhostPos() { return ghostPos; }
-    public float getGhostWidth() { return BUILDING_SIZE_TILES * mapManager.getTileWidth(); }
-    public float getGhostHeight() { return BUILDING_SIZE_TILES * mapManager.getTileHeight(); }
+    public float getGhostWidth() {
+        return currentBlueprint != null ? currentBlueprint.widthTiles * mapManager.getTileWidth() : 0;
+    }
+    public float getGhostHeight() {
+        return currentBlueprint != null ? currentBlueprint.heightTiles * mapManager.getTileHeight() : 0;
+    }
+
+    public BuildingType getCurrentBlueprint() {
+        return currentBlueprint;
+    }
 }

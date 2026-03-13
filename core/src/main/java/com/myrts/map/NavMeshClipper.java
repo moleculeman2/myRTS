@@ -15,7 +15,6 @@ public class NavMeshClipper {
     private static final GeometryFactory geoFactory = new GeometryFactory();
     private static final PrecisionModel precisionModel = new PrecisionModel(10.0);
     private static final GeometryPrecisionReducer precisionReducer = new GeometryPrecisionReducer(precisionModel);
-
     private static final Coordinate[] reusableBuildingCoords = new Coordinate[] {
         new Coordinate(),
         new Coordinate(),
