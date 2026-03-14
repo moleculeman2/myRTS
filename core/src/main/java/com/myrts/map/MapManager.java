@@ -120,69 +120,9 @@ public class MapManager {
     }
 
     /**
-     * Finds and removes any navmesh triangles that intersect with the given bounding box.
-     * @return An Array of the removed DelaunayTriangles.
-     */
-    public Array<DelaunayTriangle> removeBuildingIntersectingTriangles(float x, float y, float width, float height) {
-        // 1. Get the intersecting triangles using our helper method
-        // Large Search (Full size)
-        Array<DelaunayTriangle> fullSearchSet = getIntersectingTriangles(x, y, width, height, 0f);
-        // Small Search (Inset by 0.1f to shrink the box)
-        Array<DelaunayTriangle> smallSearchSet = getIntersectingTriangles(x, y, width, height, -0.1f);
-
-        Array<DelaunayTriangle> removedTriangles = new Array<>(smallSearchSet); // Everything strictly inside is removed
-        Array<DelaunayTriangle> survivingTriangles = new Array<>();
-        Array<DelaunayTriangle> borderCandidates = new Array<>();
-
-        // 2. First Pass: Categorize all triangles based on the sets we fetched
-        for (DelaunayTriangle tri : navMeshTriangles) {
-            if (smallSearchSet.contains(tri, true)) {
-                // Strictly inside/overlapping (already added to removedTriangles)
-                continue;
-            } else if (fullSearchSet.contains(tri, true)) {
-                // Touching the outer border (Could be parallel edge OR armpit vertex)
-                borderCandidates.add(tri);
-            } else {
-                // Completely outside and safe
-                survivingTriangles.add(tri);
-            }
-        }
-
-        // 3. Second Pass: Filter the border candidates topologically!
-        for (DelaunayTriangle candidate : borderCandidates) {
-            boolean sharesEdgeWithInterior = false;
-
-            // Check if this candidate shares a mathematical edge with ANY triangle in the small search set
-            for (int i = 0; i < 3; i++) {
-                DelaunayTriangle neighbor = candidate.neighbors[i];
-                // 'true' uses identity (==) check for speed since these are the exact same instances in memory
-                if (neighbor != null && smallSearchSet.contains(neighbor, true)) {
-                    sharesEdgeWithInterior = true;
-                    break;
-                }
-            }
-
-            if (sharesEdgeWithInterior) {
-                // It shares an edge! It's a parallel-edge triangle, so we must re-triangulate it.
-                removedTriangles.add(candidate);
-            } else {
-                // It's an armpit triangle (only shares a vertex) or a false positive. Keep it!
-                survivingTriangles.add(candidate);
-            }
-        }
-
-        // 4. Update the map's active navmesh list
-        this.navMeshTriangles = survivingTriangles;
-
-        System.out.println("Removed " + removedTriangles.size + " triangles. " + survivingTriangles.size + " remain.");
-
-        return removedTriangles;
-    }
-
-    /**
      * Finds all navmesh triangles that intersect with a given rectangular footprint,
      * expanded or shrunk by a specific buffer amount.
-     * * @param x The world x-coordinate of the footprint's bottom-left corner.
+     * @param x The world x-coordinate of the footprint's bottom-left corner.
      * @param y The world y-coordinate of the footprint's bottom-left corner.
      * @param width The width of the footprint.
      * @param height The height of the footprint.
@@ -357,31 +297,43 @@ public class MapManager {
             }
         }
 
-        // 2. Cut the hole in the NavMesh
-        Array<DelaunayTriangle> removed = removeBuildingIntersectingTriangles(worldX, worldY, worldWidth, worldHeight);
+        // 2. Grab ALL overlapping triangles using the simple buffer (no pruning!)
+        Array<DelaunayTriangle> intersectedTriangles = getIntersectingTriangles(worldX, worldY, worldWidth, worldHeight, 0.1f);
 
-        Array<DelaunayTriangle> survivingBorderTriangles = new Array<>();
-        Array<Vector2[]> boundaryEdges = extractPerimeterEdges(removed, survivingBorderTriangles);
+        // 3. Sever them from the map
+        this.navMeshTriangles.removeAll(intersectedTriangles, false);
 
-        // 3. Let ContourTracer stitch them into an ordered polygon
-        List<List<ContourTracer.Point>> polygons = ContourTracer.assemblePolygons(boundaryEdges);
+        // 4. Extract the border and collect protected T-junction vertices
+        Array<DelaunayTriangle> outBorderTriangles = new Array<>();
+        extractPerimeterEdges(intersectedTriangles, outBorderTriangles);
 
-        if (polygons.size() > 0) {
-            System.out.println("Successfully assembled " + polygons.size() + " perimeter polygons!");
+        Array<Vector2> protectedVertices = new Array<>();
+        for (DelaunayTriangle survivingTri : outBorderTriangles) {
+            for (int i = 0; i < 3; i++) {
+                if (survivingTri.neighbors[i] == null) {
+                    float p1x = survivingTri.points[(i + 1) % 3].getXf();
+                    float p1y = survivingTri.points[(i + 1) % 3].getYf();
+                    float p2x = survivingTri.points[(i + 2) % 3].getXf();
+                    float p2y = survivingTri.points[(i + 2) % 3].getYf();
+
+                    protectedVertices.add(new Vector2(p1x, p1y));
+                    protectedVertices.add(new Vector2(p2x, p2y));
+                }
+            }
         }
 
-        // 4. Subtract building and Triangulate
-        for (List<ContourTracer.Point> cavityPath : polygons) {
-            List<Polygon> p2tPolygons = NavMeshClipper.subtractBuilding(
-                cavityPath, worldX, worldY, worldWidth, worldHeight
-            );
+        // 5. Use JTS to hollow out the cavity robustly (Bypassing ContourTracer)
+        List<Polygon> p2tPolygons = NavMeshClipper.cutBuildingFromTriangles(
+            intersectedTriangles, worldX, worldY, worldWidth, worldHeight, protectedVertices
+        );
 
-            Array<DelaunayTriangle> freshlyGeneratedTriangles = new Array<>();
+        Array<DelaunayTriangle> freshlyGeneratedTriangles = new Array<>();
 
-            for (Polygon polyToTriangulate : p2tPolygons) {
+        // 6. Triangulate each piece JTS gave us
+        for (Polygon polyToTriangulate : p2tPolygons) {
+            try {
                 Poly2Tri.triangulate(polyToTriangulate);
 
-                // Collect the new triangles
                 for (DelaunayTriangle tri : polyToTriangulate.getTriangles()) {
                     for (int i = 0; i < 3; i++) {
                         if (tri.neighbors[i] != null && !tri.neighbors[i].isInterior()) {
@@ -389,12 +341,16 @@ public class MapManager {
                         }
                     }
                     freshlyGeneratedTriangles.add(tri);
-                    getNavMeshTriangles().add(tri); // Add to main map list
+                    getNavMeshTriangles().add(tri);
                 }
+            } catch (RuntimeException e) {
+                System.err.println("Warning: Triangulation failed for a register polygon - " + e.getMessage());
             }
+        }
 
-            // 5. Stitch the graph back together
-            stitchNewTriangles(freshlyGeneratedTriangles, survivingBorderTriangles);
+        // 7. Stitch the newly baked space back into the surrounding mesh!
+        if (freshlyGeneratedTriangles.size > 0 && outBorderTriangles.size > 0) {
+            stitchNewTriangles(freshlyGeneratedTriangles, outBorderTriangles);
         }
     }
 

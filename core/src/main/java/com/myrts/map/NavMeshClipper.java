@@ -248,4 +248,67 @@ public class NavMeshClipper {
 
         return p2tPoly;
     }
+
+    /**
+     * Unions all intersected triangles to form a cavity, subtracts the building,
+     * and returns clean Poly2Tri polygons.
+     */
+    public static List<org.poly2tri.geometry.polygon.Polygon> cutBuildingFromTriangles(
+        com.badlogic.gdx.utils.Array<DelaunayTriangle> intersectedTriangles,
+        float bX, float bY, float bW, float bH, Array<Vector2> protectedVertices) {
+
+        List<Geometry> polygonsToMerge = new ArrayList<>();
+
+        // 1. Make polygons from each triangle to form the cavity
+        for (DelaunayTriangle tri : intersectedTriangles) {
+            Coordinate[] triCoords = new Coordinate[] {
+                new Coordinate(tri.points[0].getX(), tri.points[0].getY()),
+                new Coordinate(tri.points[1].getX(), tri.points[1].getY()),
+                new Coordinate(tri.points[2].getX(), tri.points[2].getY()),
+                new Coordinate(tri.points[0].getX(), tri.points[0].getY()) // Close the loop
+            };
+            Polygon triPoly = geoFactory.createPolygon(triCoords);
+            polygonsToMerge.add(precisionReducer.reduce(triPoly).buffer(0));
+        }
+
+        // 2. Union them all together to get the total cavity area
+        GeometryCollection geometryCollection = geoFactory.createGeometryCollection(
+            polygonsToMerge.toArray(new Geometry[0])
+        );
+        Geometry cavityGeometry = geometryCollection.union();
+        cavityGeometry = precisionReducer.reduce(cavityGeometry).buffer(0);
+
+        // 3. Make a polygon for the building footprint
+        Coordinate[] buildingCoords = new Coordinate[] {
+            new Coordinate(bX, bY),
+            new Coordinate(bX + bW, bY),
+            new Coordinate(bX + bW, bY + bH),
+            new Coordinate(bX, bY + bH),
+            new Coordinate(bX, bY) // Close the loop
+        };
+        Polygon buildingPoly = geoFactory.createPolygon(buildingCoords);
+        Geometry validBuilding = precisionReducer.reduce(buildingPoly).buffer(0);
+
+        // 4. Subtract the building from the cavity!
+        Geometry result = cavityGeometry.difference(validBuilding);
+        result = precisionReducer.reduce(result).buffer(0);
+
+        // 5. Convert back to Poly2Tri, stripping out dangerous collinear vertices!
+        List<org.poly2tri.geometry.polygon.Polygon> resultPolys = new ArrayList<>();
+
+        if (result.isEmpty()) {
+            return resultPolys; // The building completely filled the space
+        }
+
+        if (result instanceof Polygon) {
+            resultPolys.add(convertToCleanPoly2Tri((Polygon) result, protectedVertices));
+        } else if (result instanceof MultiPolygon) {
+            MultiPolygon mp = (MultiPolygon) result;
+            for (int i = 0; i < mp.getNumGeometries(); i++) {
+                resultPolys.add(convertToCleanPoly2Tri((Polygon) mp.getGeometryN(i), protectedVertices));
+            }
+        }
+
+        return resultPolys;
+    }
 }
