@@ -408,115 +408,29 @@ public class MapManager {
         int tilesW = (int) (worldWidth / getTileWidth());
         int tilesH = (int) (worldHeight / getTileHeight());
 
-        float tileW = getTileWidth();
-        float tileH = getTileHeight();
-
-        Array<Vector2[]> openEdges = new Array<>();
-        Array<Vector2[]> blockedEdges = new Array<>();
-
-        // 1. Identify the perimeter edges before freeing the tiles
-        for (int x = 0; x < tilesW; x++) {
-            for (int y = 0; y < tilesH; y++) {
-                int currentTileX = startTileX + x;
-                int currentTileY = startTileY + y;
-
-                // Check Left Neighbor
-                if (x == 0) {
-                    int nx = currentTileX - 1;
-                    int ny = currentTileY;
-                    Vector2 p1 = new Vector2(currentTileX * tileW, currentTileY * tileH);
-                    Vector2 p2 = new Vector2(currentTileX * tileW, (currentTileY + 1) * tileH);
-
-                    if (isCollision(nx, ny)) blockedEdges.add(new Vector2[]{p1, p2});
-                    else openEdges.add(new Vector2[]{p1, p2});
-                }
-
-                // Check Right Neighbor
-                if (x == tilesW - 1) {
-                    int nx = currentTileX + 1;
-                    int ny = currentTileY;
-                    Vector2 p1 = new Vector2((currentTileX + 1) * tileW, currentTileY * tileH);
-                    Vector2 p2 = new Vector2((currentTileX + 1) * tileW, (currentTileY + 1) * tileH);
-
-                    if (isCollision(nx, ny)) blockedEdges.add(new Vector2[]{p1, p2});
-                    else openEdges.add(new Vector2[]{p1, p2});
-                }
-
-                // Check Bottom Neighbor
-                if (y == 0) {
-                    int nx = currentTileX;
-                    int ny = currentTileY - 1;
-                    Vector2 p1 = new Vector2(currentTileX * tileW, currentTileY * tileH);
-                    Vector2 p2 = new Vector2((currentTileX + 1) * tileW, currentTileY * tileH);
-
-                    if (isCollision(nx, ny)) blockedEdges.add(new Vector2[]{p1, p2});
-                    else openEdges.add(new Vector2[]{p1, p2});
-                }
-
-                // Check Top Neighbor
-                if (y == tilesH - 1) {
-                    int nx = currentTileX;
-                    int ny = currentTileY + 1;
-                    Vector2 p1 = new Vector2(currentTileX * tileW, (currentTileY + 1) * tileH);
-                    Vector2 p2 = new Vector2((currentTileX + 1) * tileW, (currentTileY + 1) * tileH);
-
-                    if (isCollision(nx, ny)) blockedEdges.add(new Vector2[]{p1, p2});
-                    else openEdges.add(new Vector2[]{p1, p2});
-                }
-            }
-        }
-
-        // 2. Free up the collision grid
+        // 1. Free up the collision grid immediately
         for (int x = 0; x < tilesW; x++) {
             for (int y = 0; y < tilesH; y++) {
                 setTileBlocked(startTileX + x, startTileY + y, false);
             }
         }
 
-        // 3. Merge collinear edges
-        openEdges = mergeCollinearEdges(openEdges);
-        blockedEdges = mergeCollinearEdges(blockedEdges);
-
-        // 4. Find intersecting triangles and identify ones sharing blocked edges
+        // 2. Find ALL triangles that touch this building footprint (no pruning!)
         Array<DelaunayTriangle> intersectedTriangles = getIntersectingTriangles(worldX, worldY, worldWidth, worldHeight, 0.1f);
-        Array<DelaunayTriangle> prunedTriangles = new Array<>();
+        System.out.println("Triangles marked for re-baking: " + intersectedTriangles.size);
 
-        float epsilon = 0.1f;
+        // 3. Sever them from the active map immediately
+        this.navMeshTriangles.removeAll(intersectedTriangles, false);
 
-        System.out.println("triangles found: " + intersectedTriangles.size);
-
-        for (DelaunayTriangle tri : intersectedTriangles) {
-            int matchCount = 0;
-
-            // Loop through each vertex on that triangle
-            for (int i = 0; i < 3; i++) {
-                matchCount = 0;
-                float tx = tri.points[i].getXf();
-                float ty = tri.points[i].getYf();
-                // Loop through blockedEdges to check for a vertex match
-                for (Vector2[] edge : blockedEdges) {
-                    if (edge[0].epsilonEquals(tx, ty, epsilon) || edge[1].epsilonEquals(tx, ty, epsilon)) {
-                        matchCount++;
-                        if (matchCount == 2) {
-                            prunedTriangles.add(tri);
-                        }
-                    }
-                }
-            }
-        }
-
-        System.out.println("Identified " + prunedTriangles.size + " triangles to delete based on blocked edges.");
-        intersectedTriangles.removeAll(prunedTriangles, false);
-        this.dTriangles.addAll(prunedTriangles);
+        this.dEdges.clear();
+        // 4. Extract perimeter and protected vertices BEFORE merging
         Array<DelaunayTriangle> outBorderTriangles = new Array<>();
+        this.dEdges = extractPerimeterEdges(intersectedTriangles, outBorderTriangles);
 
-        extractPerimeterEdges(intersectedTriangles,outBorderTriangles);
-        //EXTRACT all vertices that must be protected (the T-junctions!)
+        // Extrapolate all vertices that must be protected (T-junctions)
         Array<Vector2> protectedVertices = new Array<>();
         for (DelaunayTriangle survivingTri : outBorderTriangles) {
             for (int i = 0; i < 3; i++) {
-                // If this edge has no neighbor, it means it's an exposed edge waiting
-                // for our new navmesh to stitch to it. These vertices MUST be protected.
                 if (survivingTri.neighbors[i] == null) {
                     float p1x = survivingTri.points[(i + 1) % 3].getXf();
                     float p1y = survivingTri.points[(i + 1) % 3].getYf();
@@ -529,21 +443,17 @@ public class MapManager {
             }
         }
 
-        System.out.println("intersected: " + intersectedTriangles);
-        this.navMeshTriangles.removeAll(intersectedTriangles, false);
-
-        List<Polygon> p2tPolygons = new ArrayList<>();
-        p2tPolygons.add(mergeTrianglesAndBuilding
-            (intersectedTriangles, worldX, worldY, worldWidth, worldHeight, protectedVertices));
+        // 5. Merge all the old triangles and the building footprint into Poly2Tri formats
+        List<Polygon> p2tPolygons = NavMeshClipper.mergeTrianglesAndBuilding(
+            intersectedTriangles, worldX, worldY, worldWidth, worldHeight, protectedVertices);
 
         Array<DelaunayTriangle> freshlyGeneratedTriangles = new Array<>();
 
+        // 6. Triangulate each piece JTS gave us
         for (Polygon polyToTriangulate : p2tPolygons) {
             try {
-                // 1. Triangulate the newly formed open space
                 Poly2Tri.triangulate(polyToTriangulate);
 
-                // 2. Collect the new triangles and clean up any invalid exterior neighbor links
                 for (DelaunayTriangle tri : polyToTriangulate.getTriangles()) {
                     for (int i = 0; i < 3; i++) {
                         if (tri.neighbors[i] != null && !tri.neighbors[i].isInterior()) {
@@ -551,13 +461,14 @@ public class MapManager {
                         }
                     }
                     freshlyGeneratedTriangles.add(tri);
-                    getNavMeshTriangles().add(tri); // Add to the main map's NavMesh list
+                    getNavMeshTriangles().add(tri);
                 }
             } catch (RuntimeException e) {
                 System.err.println("Warning: Triangulation failed for an unregister polygon - " + e.getMessage());
             }
         }
 
+        // 7. Stitch the freshly baked space back into the surrounding map
         if (freshlyGeneratedTriangles.size > 0 && outBorderTriangles.size > 0) {
             stitchNewTriangles(freshlyGeneratedTriangles, outBorderTriangles);
         } else {

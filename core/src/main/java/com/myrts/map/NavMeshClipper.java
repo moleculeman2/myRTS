@@ -101,11 +101,11 @@ public class NavMeshClipper {
     }
 
     /**
-     * Merges the building footprint and all provided intersected triangles into a single
-     * Poly2Tri Polygon, snapped to the grid, with collinear vertices removed.
+     * Merges the building footprint and all provided intersected triangles into a List of
+     * Poly2Tri Polygons, snapped to the grid, with collinear vertices removed.
      */
-    public static org.poly2tri.geometry.polygon.Polygon mergeTrianglesAndBuilding(
-        com.badlogic.gdx.utils.Array<DelaunayTriangle> intersectedTriangles,
+    public static List<org.poly2tri.geometry.polygon.Polygon> mergeTrianglesAndBuilding(
+        Array<DelaunayTriangle> intersectedTriangles,
         float bX, float bY, float bW, float bH, Array<Vector2> protectedVertices) {
 
         List<Geometry> polygonsToMerge = new ArrayList<>();
@@ -138,20 +138,23 @@ public class NavMeshClipper {
             polygonsToMerge.toArray(new Geometry[0])
         );
         Geometry mergedGeometry = geometryCollection.union();
-
-        // 4. Snap to the grid to resolve floating point nonsense
         mergedGeometry = precisionReducer.reduce(mergedGeometry).buffer(0);
 
-        // 5. Convert back to Poly2Tri polygon format, cleaning collinear points along the way
+        // 4. Return as a List to safely handle MultiPolygons
+        List<org.poly2tri.geometry.polygon.Polygon> resultPolys = new ArrayList<>();
+
         if (mergedGeometry instanceof Polygon) {
-            return convertToCleanPoly2Tri((Polygon) mergedGeometry, protectedVertices);
-        } else if (mergedGeometry instanceof MultiPolygon && mergedGeometry.getNumGeometries() > 0) {
-            System.err.println("Warning: Merged geometry resulted in a MultiPolygon. Returning the first polygon part.");
-            return convertToCleanPoly2Tri((Polygon) mergedGeometry.getGeometryN(0), protectedVertices);
+            resultPolys.add(convertToCleanPoly2Tri((Polygon) mergedGeometry, protectedVertices));
+        } else if (mergedGeometry instanceof MultiPolygon) {
+            MultiPolygon mp = (MultiPolygon) mergedGeometry;
+            for (int i = 0; i < mp.getNumGeometries(); i++) {
+                resultPolys.add(convertToCleanPoly2Tri((Polygon) mp.getGeometryN(i), protectedVertices));
+            }
+        } else {
+            System.err.println("Warning: Failed to generate a valid merged polygon.");
         }
 
-        System.err.println("Warning: Failed to generate a valid merged polygon.");
-        return null;
+        return resultPolys;
     }
 
     /**
@@ -198,7 +201,7 @@ public class NavMeshClipper {
             if (protectedVertices != null) {
                 for (Vector2 pt : protectedVertices) {
                     // Use a small epsilon for floating point vs double comparisons
-                    if (Math.abs(pt.x - curr.x) < 0.001f && Math.abs(pt.y - curr.y) < 0.1f) {
+                    if (Math.abs(pt.x - curr.x) < 0.001f && Math.abs(pt.y - curr.y) < 0.001f) {
                         isProtected = true;
                         break;
                     }
