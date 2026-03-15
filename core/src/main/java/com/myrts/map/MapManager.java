@@ -33,7 +33,7 @@ import static com.myrts.map.NavMeshClipper.mergeTrianglesAndBuilding;
 public class MapManager {
 
     private TiledMap map;
-    private TiledMapRenderer renderer;
+    private OrthogonalTiledMapRenderer renderer;
     private int mapWidth;
     private int mapHeight;
     private int tileWidth;
@@ -42,6 +42,12 @@ public class MapManager {
     private Array<DelaunayTriangle> navMeshTriangles;
     public Array<DelaunayTriangle> dTriangles;
     public Array<Vector2[]> dEdges;
+    // Pre-allocate the arrays and polygons to prevent GC allocation during runtime
+    private final float[] footprintVertices = new float[8];
+    private final com.badlogic.gdx.math.Polygon footprintPoly = new com.badlogic.gdx.math.Polygon();
+
+    private final float[] triVertices = new float[6];
+    private final com.badlogic.gdx.math.Polygon triPoly = new com.badlogic.gdx.math.Polygon();
 
     public MapManager(String mapFilePath) {
         loadMap(mapFilePath);
@@ -136,26 +142,24 @@ public class MapManager {
             return intersectingTriangles;
         }
 
-        // Apply the buffer to the footprint bounds
         float minX = x - buffer;
         float minY = y - buffer;
         float maxX = x + width + buffer;
         float maxY = y + height + buffer;
 
-        // Create a LibGDX Polygon for the buffered footprint
-        float[] footprintVertices = new float[] {
-            minX, minY,
-            maxX, minY,
-            maxX, maxY,
-            minX, maxY
-        };
-        com.badlogic.gdx.math.Polygon footprintPoly = new com.badlogic.gdx.math.Polygon(footprintVertices);
+        // Mutate the pre-allocated array
+        footprintVertices[0] = minX;
+        footprintVertices[1] = minY;
+        footprintVertices[2] = maxX;
+        footprintVertices[3] = minY;
+        footprintVertices[4] = maxX;
+        footprintVertices[5] = maxY;
+        footprintVertices[6] = minX;
+        footprintVertices[7] = maxY;
 
-        // Pre-allocate a polygon to reuse for each triangle to avoid garbage collection overhead
-        float[] triVertices = new float[6];
-        com.badlogic.gdx.math.Polygon triPoly = new com.badlogic.gdx.math.Polygon(triVertices);
+        // Update the polygon (this recalculates bounding boxes internally without allocating memory)
+        footprintPoly.setVertices(footprintVertices);
 
-        // Loop through the navmesh and test for intersection
         for (DelaunayTriangle tri : navMeshTriangles) {
             triVertices[0] = tri.points[0].getXf();
             triVertices[1] = tri.points[0].getYf();
@@ -163,9 +167,9 @@ public class MapManager {
             triVertices[3] = tri.points[1].getYf();
             triVertices[4] = tri.points[2].getXf();
             triVertices[5] = tri.points[2].getYf();
+
             triPoly.setVertices(triVertices);
 
-            // Check if the footprint overlaps this specific triangle
             if (Intersector.overlapConvexPolygons(footprintPoly, triPoly)) {
                 intersectingTriangles.add(tri);
             }
@@ -432,64 +436,6 @@ public class MapManager {
         }
     }
 
-    /**
-     * Takes an Array of line segments and continuously merges any segments that
-     * share an endpoint and travel in the same direction (collinear).
-     */
-    private Array<Vector2[]> mergeCollinearEdges(Array<Vector2[]> edges) {
-        boolean mergedAny = true;
-        float epsilon = 0.001f; // Account for floating point inaccuracies
-
-        while (mergedAny) {
-            mergedAny = false;
-
-            for (int i = 0; i < edges.size; i++) {
-                for (int j = i + 1; j < edges.size; j++) {
-                    Vector2[] e1 = edges.get(i);
-                    Vector2[] e2 = edges.get(j);
-
-                    Vector2 sharedPoint = null;
-                    Vector2 p1 = null;
-                    Vector2 p2 = null;
-
-                    // Find if they share an exact endpoint
-                    if (e1[0].epsilonEquals(e2[0], epsilon)) {
-                        sharedPoint = e1[0]; p1 = e1[1]; p2 = e2[1];
-                    } else if (e1[0].epsilonEquals(e2[1], epsilon)) {
-                        sharedPoint = e1[0]; p1 = e1[1]; p2 = e2[0];
-                    } else if (e1[1].epsilonEquals(e2[0], epsilon)) {
-                        sharedPoint = e1[1]; p1 = e1[0]; p2 = e2[1];
-                    } else if (e1[1].epsilonEquals(e2[1], epsilon)) {
-                        sharedPoint = e1[1]; p1 = e1[0]; p2 = e2[0];
-                    }
-
-                    // If they touch, check if they form a straight line
-                    if (sharedPoint != null) {
-                        // Calculate cross product to check collinearity
-                        float dx1 = sharedPoint.x - p1.x;
-                        float dy1 = sharedPoint.y - p1.y;
-                        float dx2 = p2.x - sharedPoint.x;
-                        float dy2 = p2.y - sharedPoint.y;
-
-                        float crossProduct = (dx1 * dy2) - (dy1 * dx2);
-
-                        if (Math.abs(crossProduct) < epsilon) {
-                            // They are collinear! Remove the two small segments and add the merged one
-                            edges.removeIndex(j); // Remove highest index first so 'i' doesn't shift unexpectedly
-                            edges.removeIndex(i);
-                            edges.add(new Vector2[]{p1, p2});
-
-                            mergedAny = true;
-                            break; // Break inner loop and restart to prevent index out of bounds
-                        }
-                    }
-                }
-                if (mergedAny) break; // Break outer loop to restart from the beginning
-            }
-        }
-        return edges;
-    }
-
     public void createEntitiesFromMap(Engine engine) {
         // Process object layers to create entities
         MapLayer objectLayer = map.getLayers().get("Objects");
@@ -590,6 +536,7 @@ public class MapManager {
 
     public void dispose() {
         map.dispose();
+        renderer.dispose();
     }
 
 }

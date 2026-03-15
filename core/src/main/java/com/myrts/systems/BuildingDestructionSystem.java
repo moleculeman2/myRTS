@@ -32,6 +32,6 @@ public class BuildingDestructionSystem extends IteratingSystem {
 
         // Remove the BuildingComponent so this system doesn't process it again next frame
         // in case the Reaper system hasn't cleaned it up yet.
-        entity.remove(BuildingComponent.class);
+        //entity.remove(BuildingComponent.class);
     }
 }

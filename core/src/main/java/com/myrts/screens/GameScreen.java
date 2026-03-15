@@ -1,6 +1,7 @@
 package com.myrts.screens;
 
 import com.badlogic.ashley.core.Engine;
+import com.badlogic.ashley.core.PooledEngine;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Screen;
 import com.badlogic.gdx.graphics.Color;
@@ -20,7 +21,7 @@ import org.poly2tri.triangulation.delaunay.DelaunayTriangle;
 
 public class GameScreen implements Screen {
     private final GameBase game;
-    private Engine engine;
+    private PooledEngine engine;
     private OrthographicCamera camera;
     private MapManager mapManager;
     private InputProcessor inputProcessor;
@@ -29,7 +30,7 @@ public class GameScreen implements Screen {
 
     public GameScreen(GameBase game) {
         this.game = game;
-        this.engine = new Engine();
+        this.engine = new PooledEngine();
         EntityFactory.initialize();
 
         camera = new OrthographicCamera();
