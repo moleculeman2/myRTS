@@ -287,30 +287,33 @@ public class MapManager {
         return true;
     }
 
-    /**
-     * Registers a new building obstacle, updating the collision grid and re-baking the local NavMesh.
-     */
-    public void registerBuildingObstacle(float worldX, float worldY, float worldWidth, float worldHeight, int tilesW, int tilesH) {
-        // 1. Update Tile Collision Map
-        int startTileX = (int) (worldX / getTileWidth());
-        int startTileY = (int) (worldY / getTileHeight());
-
-        for (int x = 0; x < tilesW; x++) {
-            for (int y = 0; y < tilesH; y++) {
-                setTileBlocked(startTileX + x, startTileY + y, true);
-            }
-        }
-
-        // 2. Grab ALL overlapping triangles using the simple buffer (no pruning!)
+    private boolean rebakeNavMeshRegion(float worldX, float worldY, float worldWidth, float worldHeight, boolean isPlacingBuilding) {
+        // 1. Grab ALL overlapping triangles using the simple buffer
         Array<DelaunayTriangle> intersectedTriangles = getIntersectingTriangles(worldX, worldY, worldWidth, worldHeight, 0.1f);
 
-        // 3. Sever them from the map
+        if (intersectedTriangles.isEmpty()) {
+            if (isPlacingBuilding) {
+                // We are placing a building in a spot that already has no NavMesh.
+                // Nothing to cut. We can safely return.
+                return true;
+            }
+            // If we are UNREGISTERING a building, we CANNOT return early!
+            // We need to flow down to NavMeshClipper so it can turn this
+            // empty void back into walkable triangles.
+        }
+
+        // 2. Sever them from the active map
         this.navMeshTriangles.removeAll(intersectedTriangles, false);
 
-        // 4. Extract the border and collect protected T-junction vertices
+        // 3. Extract the border and perimeter edges
         Array<DelaunayTriangle> outBorderTriangles = new Array<>();
-        extractPerimeterEdges(intersectedTriangles, outBorderTriangles);
+        Array<Vector2[]> extractedEdges = extractPerimeterEdges(intersectedTriangles, outBorderTriangles);
 
+        if (!isPlacingBuilding) {
+            this.dEdges = extractedEdges;
+        }
+
+        // 4. Collect protected T-junction vertices
         Array<Vector2> protectedVertices = new Array<>();
         for (DelaunayTriangle survivingTri : outBorderTriangles) {
             for (int i = 0; i < 3; i++) {
@@ -326,10 +329,17 @@ public class MapManager {
             }
         }
 
-        // 5. Use JTS to hollow out the cavity robustly (Bypassing ContourTracer)
-        List<Polygon> p2tPolygons = NavMeshClipper.cutBuildingFromTriangles(
-            intersectedTriangles, worldX, worldY, worldWidth, worldHeight, protectedVertices
-        );
+        // 5. Use JTS to hollow out or fill the cavity
+        List<Polygon> p2tPolygons;
+        if (isPlacingBuilding) {
+            p2tPolygons = NavMeshClipper.cutBuildingFromTriangles(
+                intersectedTriangles, worldX, worldY, worldWidth, worldHeight, protectedVertices
+            );
+        } else {
+            p2tPolygons = NavMeshClipper.mergeTrianglesAndBuilding(
+                intersectedTriangles, worldX, worldY, worldWidth, worldHeight, protectedVertices
+            );
+        }
 
         Array<DelaunayTriangle> freshlyGeneratedTriangles = new Array<>();
 
@@ -345,23 +355,66 @@ public class MapManager {
                         }
                     }
                     freshlyGeneratedTriangles.add(tri);
-                    getNavMeshTriangles().add(tri);
+                    this.navMeshTriangles.add(tri); // Add to main mesh
                 }
             } catch (RuntimeException e) {
-                System.err.println("Warning: Triangulation failed for a register polygon - " + e.getMessage());
+                System.err.println("CRITICAL: Triangulation failed during rebake - " + e.getMessage());
+
+                // --- THE FALLBACK LOGIC ---
+
+                // A. Remove any partial new triangles that might have been added before the crash
+                for (DelaunayTriangle partialTri : freshlyGeneratedTriangles) {
+                    this.navMeshTriangles.removeValue(partialTri, true);
+                }
+
+                // B. Restore the original triangles we severed in Step 2!
+                // This heals the "hole" in the navmesh perfectly.
+                this.navMeshTriangles.addAll(intersectedTriangles);
+
+                // C. Re-link the original triangles to the border triangles so pathfinding doesn't break
+                stitchNewTriangles(intersectedTriangles, outBorderTriangles);
+
+                // D. Tell the caller the operation failed
+                return false;
             }
         }
 
-        // 7. Stitch the newly baked space back into the surrounding mesh!
+        // 7. If we made it here, triangulation succeeded! Stitch the newly baked space.
         if (freshlyGeneratedTriangles.size > 0 && outBorderTriangles.size > 0) {
             stitchNewTriangles(freshlyGeneratedTriangles, outBorderTriangles);
         }
+
+        return true; // Success!
     }
 
-    /**
-     * Unregisters a building obstacle, freeing up the collision grid.
-     * (NavMesh re-stitching to be implemented later).
-     */
+    public boolean registerBuildingObstacle(float worldX, float worldY, float worldWidth, float worldHeight, int tilesW, int tilesH) {
+        int startTileX = (int) (worldX / getTileWidth());
+        int startTileY = (int) (worldY / getTileHeight());
+
+        // 1. Temporarily block the tiles
+        for (int x = 0; x < tilesW; x++) {
+            for (int y = 0; y < tilesH; y++) {
+                setTileBlocked(startTileX + x, startTileY + y, true);
+            }
+        }
+
+        // 2. Attempt to rebake the NavMesh
+        boolean navMeshSuccess = rebakeNavMeshRegion(worldX, worldY, worldWidth, worldHeight, true);
+
+        // 3. If Poly2Tri crashed, revert the collision grid so the game state isn't corrupted!
+        if (!navMeshSuccess) {
+            System.err.println("Building placement rejected: NavMesh generation failed.");
+            for (int x = 0; x < tilesW; x++) {
+                for (int y = 0; y < tilesH; y++) {
+                    setTileBlocked(startTileX + x, startTileY + y, false);
+                }
+            }
+            return false; // Tell your ECS system or placement logic to cancel the building
+        }
+
+        return true; // The building is fully registered in both the Grid and NavMesh
+    }
+
     public void unregisterBuildingObstacle(float worldX, float worldY, float worldWidth, float worldHeight) {
         int startTileX = (int) (worldX / getTileWidth());
         int startTileY = (int) (worldY / getTileHeight());
@@ -375,65 +428,8 @@ public class MapManager {
             }
         }
 
-        // 2. Find ALL triangles that touch this building footprint (no pruning!)
-        Array<DelaunayTriangle> intersectedTriangles = getIntersectingTriangles(worldX, worldY, worldWidth, worldHeight, 0.1f);
-        System.out.println("Triangles marked for re-baking: " + intersectedTriangles.size);
-
-        // 3. Sever them from the active map immediately
-        this.navMeshTriangles.removeAll(intersectedTriangles, false);
-
-        this.dEdges.clear();
-        // 4. Extract perimeter and protected vertices BEFORE merging
-        Array<DelaunayTriangle> outBorderTriangles = new Array<>();
-        this.dEdges = extractPerimeterEdges(intersectedTriangles, outBorderTriangles);
-
-        // Extrapolate all vertices that must be protected (T-junctions)
-        Array<Vector2> protectedVertices = new Array<>();
-        for (DelaunayTriangle survivingTri : outBorderTriangles) {
-            for (int i = 0; i < 3; i++) {
-                if (survivingTri.neighbors[i] == null) {
-                    float p1x = survivingTri.points[(i + 1) % 3].getXf();
-                    float p1y = survivingTri.points[(i + 1) % 3].getYf();
-                    float p2x = survivingTri.points[(i + 2) % 3].getXf();
-                    float p2y = survivingTri.points[(i + 2) % 3].getYf();
-
-                    protectedVertices.add(new Vector2(p1x, p1y));
-                    protectedVertices.add(new Vector2(p2x, p2y));
-                }
-            }
-        }
-
-        // 5. Merge all the old triangles and the building footprint into Poly2Tri formats
-        List<Polygon> p2tPolygons = NavMeshClipper.mergeTrianglesAndBuilding(
-            intersectedTriangles, worldX, worldY, worldWidth, worldHeight, protectedVertices);
-
-        Array<DelaunayTriangle> freshlyGeneratedTriangles = new Array<>();
-
-        // 6. Triangulate each piece JTS gave us
-        for (Polygon polyToTriangulate : p2tPolygons) {
-            try {
-                Poly2Tri.triangulate(polyToTriangulate);
-
-                for (DelaunayTriangle tri : polyToTriangulate.getTriangles()) {
-                    for (int i = 0; i < 3; i++) {
-                        if (tri.neighbors[i] != null && !tri.neighbors[i].isInterior()) {
-                            tri.neighbors[i] = null;
-                        }
-                    }
-                    freshlyGeneratedTriangles.add(tri);
-                    getNavMeshTriangles().add(tri);
-                }
-            } catch (RuntimeException e) {
-                System.err.println("Warning: Triangulation failed for an unregister polygon - " + e.getMessage());
-            }
-        }
-
-        // 7. Stitch the freshly baked space back into the surrounding map
-        if (freshlyGeneratedTriangles.size > 0 && outBorderTriangles.size > 0) {
-            stitchNewTriangles(freshlyGeneratedTriangles, outBorderTriangles);
-        } else {
-            System.out.println("No stitching required or missing triangles.");
-        }
+        // 2. Delegate to the reusable rebake method (isPlacingBuilding = false)
+        rebakeNavMeshRegion(worldX, worldY, worldWidth, worldHeight, false);
     }
 
     public void createEntitiesFromMap(Engine engine) {

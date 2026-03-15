@@ -193,13 +193,15 @@ public class InputProcessor extends InputAdapter {
         System.out.println("Placing building at world: " + transform.position.x + ", " + transform.position.y);
 
         // 1. Create real Entity
-        EntityFactory.createBuilding(engine, transform.position.x, transform.position.y, transform.width, transform.height, currentBlueprint);
 
         // 2. Delegate Map changes to MapManager
-        mapManager.registerBuildingObstacle(transform.position.x, transform.position.y, transform.width, transform.height, currentBlueprint.widthTiles, currentBlueprint.heightTiles);
-
+        Boolean buildingSuccess = mapManager.registerBuildingObstacle(transform.position.x, transform.position.y, transform.width, transform.height, currentBlueprint.widthTiles, currentBlueprint.heightTiles);
+        if (buildingSuccess){
+            EntityFactory.createBuilding(engine, transform.position.x, transform.position.y, transform.width, transform.height, currentBlueprint);
+            cancelPlacement();
+        }
         // 3. Exit placement mode and destroy the ghost
-        cancelPlacement();
+
     }
 
     private void attemptBuildingDeletion() {
