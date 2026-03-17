@@ -432,6 +432,45 @@ public class MapManager {
         rebakeNavMeshRegion(worldX, worldY, worldWidth, worldHeight, false);
     }
 
+    /**
+     * Finds which NavMesh triangle contains the given world coordinates.
+     * @return The DelaunayTriangle containing the point, or null if the point is off the mesh (in a wall/void).
+     */
+    public DelaunayTriangle getTriangleAt(float worldX, float worldY) {
+        if (navMeshTriangles == null) return null;
+
+        for (DelaunayTriangle tri : navMeshTriangles) {
+            if (isPointInTriangle(worldX, worldY, tri)) {
+                return tri;
+            }
+        }
+        return null; // The player clicked on a blocked tile or outside the map!
+    }
+
+    /**
+     * Mathematical check to see if a 2D point lies within a 3D triangle's 2D projection.
+     */
+    private boolean isPointInTriangle(float px, float py, DelaunayTriangle tri) {
+        float p0x = tri.points[0].getXf();
+        float p0y = tri.points[0].getYf();
+        float p1x = tri.points[1].getXf();
+        float p1y = tri.points[1].getYf();
+        float p2x = tri.points[2].getXf();
+        float p2y = tri.points[2].getYf();
+
+        // Barycentric coordinate math
+        float area = 0.5f * (-p1y * p2x + p0y * (-p1x + p2x) + p0x * (p1y - p2y) + p1x * p2y);
+
+        // If the area is extremely close to 0, it's a degenerate triangle.
+        if (area <= 0.0001f && area >= -0.0001f) return false;
+
+        float s = 1 / (2 * area) * (p0y * p2x - p0x * p2y + (p2y - p0y) * px + (p0x - p2x) * py);
+        float t = 1 / (2 * area) * (p0x * p1y - p0y * p1x + (p0y - p1y) * px + (p1x - p0x) * py);
+
+        // If s, t, and 1-s-t are all >= 0, the point is inside!
+        return s >= 0 && t >= 0 && (1 - s - t) >= 0;
+    }
+
     public void createEntitiesFromMap(Engine engine) {
         // Process object layers to create entities
         MapLayer objectLayer = map.getLayers().get("Objects");
@@ -534,5 +573,4 @@ public class MapManager {
         map.dispose();
         renderer.dispose();
     }
-
 }

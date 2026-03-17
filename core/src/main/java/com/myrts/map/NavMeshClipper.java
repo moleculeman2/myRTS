@@ -6,6 +6,8 @@ import org.locationtech.jts.geom.*;
 import org.locationtech.jts.precision.GeometryPrecisionReducer;
 import org.poly2tri.geometry.polygon.PolygonPoint;
 import org.poly2tri.triangulation.delaunay.DelaunayTriangle;
+import com.badlogic.gdx.utils.Pool;
+import com.badlogic.gdx.utils.Array;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -15,13 +17,27 @@ public class NavMeshClipper {
     private static final GeometryFactory geoFactory = new GeometryFactory();
     private static final PrecisionModel precisionModel = new PrecisionModel(10.0);
     private static final GeometryPrecisionReducer precisionReducer = new GeometryPrecisionReducer(precisionModel);
-    private static final Coordinate[] reusableBuildingCoords = new Coordinate[] {
-        new Coordinate(),
-        new Coordinate(),
-        new Coordinate(),
-        new Coordinate(),
-        new Coordinate()
+
+    // 1. Create the Pool
+    private static final Pool<Coordinate> coordPool = new Pool<Coordinate>() {
+        @Override
+        protected Coordinate newObject() {
+            return new Coordinate();
+        }
     };
+
+    // 2. Create a tracker so we don't lose the coordinates we borrow
+    private static final Array<Coordinate> activeCoords = new Array<>();
+
+    // 3. Helper method to easily grab and track a recycled coordinate
+    private static Coordinate obtainCoord(float x, float y) {
+        Coordinate c = coordPool.obtain();
+        c.x = x;
+        c.y = y;
+        c.z = Coordinate.NULL_ORDINATE; // Ensure clean state
+        activeCoords.add(c);
+        return c;
+    }
 
     /**
      * Merges the building footprint and all provided intersected triangles into a List of
@@ -31,53 +47,64 @@ public class NavMeshClipper {
         Array<DelaunayTriangle> intersectedTriangles,
         float bX, float bY, float bW, float bH, Array<Vector2> protectedVertices) {
 
-        List<Geometry> polygonsToMerge = new ArrayList<>();
+        // Guarantee tracker is empty
+        activeCoords.clear();
 
-        // 1. Make a polygon from the building footprint info
-        Coordinate[] buildingCoords = new Coordinate[] {
-            new Coordinate(bX, bY),
-            new Coordinate(bX + bW, bY),
-            new Coordinate(bX + bW, bY + bH),
-            new Coordinate(bX, bY + bH),
-            new Coordinate(bX, bY) // Close the loop
-        };
-        Polygon buildingPoly = geoFactory.createPolygon(buildingCoords);
-        polygonsToMerge.add(precisionReducer.reduce(buildingPoly).buffer(0));
+        try {
+            List<Geometry> polygonsToMerge = new ArrayList<>();
 
-        // 2. Make polygons from each triangle
-        for (DelaunayTriangle tri : intersectedTriangles) {
-            Coordinate[] triCoords = new Coordinate[] {
-                new Coordinate(tri.points[0].getX(), tri.points[0].getY()),
-                new Coordinate(tri.points[1].getX(), tri.points[1].getY()),
-                new Coordinate(tri.points[2].getX(), tri.points[2].getY()),
-                new Coordinate(tri.points[0].getX(), tri.points[0].getY()) // Close the loop
+            // 1. Fetch pooled coordinates for the building
+            Coordinate[] buildingCoords = new Coordinate[] {
+                obtainCoord(bX, bY),
+                obtainCoord(bX + bW, bY),
+                obtainCoord(bX + bW, bY + bH),
+                obtainCoord(bX, bY + bH),
+                obtainCoord(bX, bY) // Close the loop
             };
-            Polygon triPoly = geoFactory.createPolygon(triCoords);
-            polygonsToMerge.add(precisionReducer.reduce(triPoly).buffer(0));
-        }
+            Polygon buildingPoly = geoFactory.createPolygon(buildingCoords);
+            polygonsToMerge.add(precisionReducer.reduce(buildingPoly).buffer(0));
 
-        // 3. Merge them all together into one single polygon
-        GeometryCollection geometryCollection = geoFactory.createGeometryCollection(
-            polygonsToMerge.toArray(new Geometry[0])
-        );
-        Geometry mergedGeometry = geometryCollection.union();
-        mergedGeometry = precisionReducer.reduce(mergedGeometry).buffer(0);
-
-        // 4. Return as a List to safely handle MultiPolygons
-        List<org.poly2tri.geometry.polygon.Polygon> resultPolys = new ArrayList<>();
-
-        if (mergedGeometry instanceof Polygon) {
-            resultPolys.add(convertToCleanPoly2Tri((Polygon) mergedGeometry, protectedVertices));
-        } else if (mergedGeometry instanceof MultiPolygon) {
-            MultiPolygon mp = (MultiPolygon) mergedGeometry;
-            for (int i = 0; i < mp.getNumGeometries(); i++) {
-                resultPolys.add(convertToCleanPoly2Tri((Polygon) mp.getGeometryN(i), protectedVertices));
+            // 2. Fetch pooled coordinates for EVERY triangle
+            for (DelaunayTriangle tri : intersectedTriangles) {
+                Coordinate[] triCoords = new Coordinate[] {
+                    obtainCoord(tri.points[0].getXf(), tri.points[0].getYf()),
+                    obtainCoord(tri.points[1].getXf(), tri.points[1].getYf()),
+                    obtainCoord(tri.points[2].getXf(), tri.points[2].getYf()),
+                    obtainCoord(tri.points[0].getXf(), tri.points[0].getYf()) // Close the loop
+                };
+                Polygon triPoly = geoFactory.createPolygon(triCoords);
+                polygonsToMerge.add(precisionReducer.reduce(triPoly).buffer(0));
             }
-        } else {
-            System.err.println("Warning: Failed to generate a valid merged polygon.");
-        }
 
-        return resultPolys;
+            // 3. Merge them all together
+            // Optimization: pass exact size to avoid an extra internal array allocation
+            GeometryCollection geometryCollection = geoFactory.createGeometryCollection(
+                polygonsToMerge.toArray(new Geometry[polygonsToMerge.size()])
+            );
+            Geometry mergedGeometry = geometryCollection.union();
+            mergedGeometry = precisionReducer.reduce(mergedGeometry).buffer(0);
+
+            // 4. Return as a List to safely handle MultiPolygons
+            List<org.poly2tri.geometry.polygon.Polygon> resultPolys = new ArrayList<>();
+
+            if (mergedGeometry instanceof Polygon) {
+                resultPolys.add(convertToCleanPoly2Tri((Polygon) mergedGeometry, protectedVertices));
+            } else if (mergedGeometry instanceof MultiPolygon) {
+                MultiPolygon mp = (MultiPolygon) mergedGeometry;
+                for (int i = 0; i < mp.getNumGeometries(); i++) {
+                    resultPolys.add(convertToCleanPoly2Tri((Polygon) mp.getGeometryN(i), protectedVertices));
+                }
+            } else {
+                System.err.println("Warning: Failed to generate a valid merged polygon.");
+            }
+
+            return resultPolys;
+
+        } finally {
+            // 5. THE MAGIC: Throw all coordinates back into the pool, no GC penalty!
+            coordPool.freeAll(activeCoords);
+            activeCoords.clear();
+        }
     }
 
     /**
@@ -144,32 +171,7 @@ public class NavMeshClipper {
                 cleanedPoints.add(new PolygonPoint(curr.x, curr.y));
             }
         }
-
         return cleanedPoints;
-    }
-
-    private static org.poly2tri.geometry.polygon.Polygon convertToPoly2Tri(Polygon jtsPolygon) {
-        // Extract Outer Boundary
-        Coordinate[] outerCoords = jtsPolygon.getExteriorRing().getCoordinates();
-        // Poly2Tri does NOT want the closed duplicate point at the end
-        List<PolygonPoint> p2tOuter = new ArrayList<>();
-        for (int i = 0; i < outerCoords.length - 1; i++) {
-            p2tOuter.add(new PolygonPoint(outerCoords[i].x, outerCoords[i].y));
-        }
-
-        org.poly2tri.geometry.polygon.Polygon p2tPoly = new org.poly2tri.geometry.polygon.Polygon(p2tOuter);
-
-        // Extract any Interior Holes (e.g., if the building was completely inside the cavity)
-        for (int i = 0; i < jtsPolygon.getNumInteriorRing(); i++) {
-            Coordinate[] holeCoords = jtsPolygon.getInteriorRingN(i).getCoordinates();
-            List<PolygonPoint> p2tHole = new ArrayList<>();
-            for (int j = 0; j < holeCoords.length - 1; j++) {
-                p2tHole.add(new PolygonPoint(holeCoords[j].x, holeCoords[j].y));
-            }
-            p2tPoly.addHole(new org.poly2tri.geometry.polygon.Polygon(p2tHole));
-        }
-
-        return p2tPoly;
     }
 
     /**
@@ -180,58 +182,70 @@ public class NavMeshClipper {
         com.badlogic.gdx.utils.Array<DelaunayTriangle> intersectedTriangles,
         float bX, float bY, float bW, float bH, Array<Vector2> protectedVertices) {
 
-        List<Geometry> polygonsToMerge = new ArrayList<>();
+        // Guarantee tracker is empty before we start
+        activeCoords.clear();
 
-        // 1. Make polygons from each triangle to form the cavity
-        for (DelaunayTriangle tri : intersectedTriangles) {
-            Coordinate[] triCoords = new Coordinate[] {
-                new Coordinate(tri.points[0].getX(), tri.points[0].getY()),
-                new Coordinate(tri.points[1].getX(), tri.points[1].getY()),
-                new Coordinate(tri.points[2].getX(), tri.points[2].getY()),
-                new Coordinate(tri.points[0].getX(), tri.points[0].getY()) // Close the loop
-            };
-            Polygon triPoly = geoFactory.createPolygon(triCoords);
-            polygonsToMerge.add(precisionReducer.reduce(triPoly).buffer(0));
-        }
+        try {
+            List<Geometry> polygonsToMerge = new ArrayList<>();
 
-        // 2. Union them all together to get the total cavity area
-        GeometryCollection geometryCollection = geoFactory.createGeometryCollection(
-            polygonsToMerge.toArray(new Geometry[0])
-        );
-        Geometry cavityGeometry = geometryCollection.union();
-        cavityGeometry = precisionReducer.reduce(cavityGeometry).buffer(0);
-
-        // 3. Make a polygon for the building footprint
-        Coordinate[] buildingCoords = new Coordinate[] {
-            new Coordinate(bX, bY),
-            new Coordinate(bX + bW, bY),
-            new Coordinate(bX + bW, bY + bH),
-            new Coordinate(bX, bY + bH),
-            new Coordinate(bX, bY) // Close the loop
-        };
-        Polygon buildingPoly = geoFactory.createPolygon(buildingCoords);
-        Geometry validBuilding = precisionReducer.reduce(buildingPoly).buffer(0);
-
-        // 4. Subtract the building from the cavity!
-        Geometry result = cavityGeometry.difference(validBuilding);
-        result = precisionReducer.reduce(result).buffer(0);
-
-        // 5. Convert back to Poly2Tri, stripping out dangerous collinear vertices!
-        List<org.poly2tri.geometry.polygon.Polygon> resultPolys = new ArrayList<>();
-
-        if (result.isEmpty()) {
-            return resultPolys; // The building completely filled the space
-        }
-
-        if (result instanceof Polygon) {
-            resultPolys.add(convertToCleanPoly2Tri((Polygon) result, protectedVertices));
-        } else if (result instanceof MultiPolygon) {
-            MultiPolygon mp = (MultiPolygon) result;
-            for (int i = 0; i < mp.getNumGeometries(); i++) {
-                resultPolys.add(convertToCleanPoly2Tri((Polygon) mp.getGeometryN(i), protectedVertices));
+            // 1. Make polygons from each triangle to form the cavity using POOLED coordinates
+            for (DelaunayTriangle tri : intersectedTriangles) {
+                Coordinate[] triCoords = new Coordinate[] {
+                    obtainCoord(tri.points[0].getXf(), tri.points[0].getYf()),
+                    obtainCoord(tri.points[1].getXf(), tri.points[1].getYf()),
+                    obtainCoord(tri.points[2].getXf(), tri.points[2].getYf()),
+                    obtainCoord(tri.points[0].getXf(), tri.points[0].getYf()) // Close the loop
+                };
+                Polygon triPoly = geoFactory.createPolygon(triCoords);
+                polygonsToMerge.add(precisionReducer.reduce(triPoly).buffer(0));
             }
-        }
 
-        return resultPolys;
+            // 2. Union them all together to get the total cavity area
+            GeometryCollection geometryCollection = geoFactory.createGeometryCollection(
+                polygonsToMerge.toArray(new Geometry[polygonsToMerge.size()])
+            );
+            Geometry cavityGeometry = geometryCollection.union();
+            cavityGeometry = precisionReducer.reduce(cavityGeometry).buffer(0);
+
+            // 3. Make a polygon for the building footprint using POOLED coordinates
+            Coordinate[] buildingCoords = new Coordinate[] {
+                obtainCoord(bX, bY),
+                obtainCoord(bX + bW, bY),
+                obtainCoord(bX + bW, bY + bH),
+                obtainCoord(bX, bY + bH),
+                obtainCoord(bX, bY) // Close the loop
+            };
+            Polygon buildingPoly = geoFactory.createPolygon(buildingCoords);
+            Geometry validBuilding = precisionReducer.reduce(buildingPoly).buffer(0);
+
+            // 4. Subtract the building from the cavity!
+            Geometry result = cavityGeometry.difference(validBuilding);
+            result = precisionReducer.reduce(result).buffer(0);
+
+            // 5. Convert back to Poly2Tri, stripping out dangerous collinear vertices!
+            List<org.poly2tri.geometry.polygon.Polygon> resultPolys = new ArrayList<>();
+
+            if (result.isEmpty()) {
+                return resultPolys; // The building completely filled the space
+            }
+
+            if (result instanceof Polygon) {
+                resultPolys.add(convertToCleanPoly2Tri((Polygon) result, protectedVertices));
+            } else if (result instanceof MultiPolygon) {
+                MultiPolygon mp = (MultiPolygon) result;
+                for (int i = 0; i < mp.getNumGeometries(); i++) {
+                    resultPolys.add(convertToCleanPoly2Tri((Polygon) mp.getGeometryN(i), protectedVertices));
+                }
+            }
+
+            return resultPolys;
+
+        } finally {
+            // 6. Free all coordinates back to the pool to prevent GC spikes!
+            coordPool.freeAll(activeCoords);
+            activeCoords.clear();
+        }
     }
+
+
 }

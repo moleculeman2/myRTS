@@ -10,10 +10,12 @@ import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.myrts.GameBase;
 import com.myrts.blueprints.BuildingType;
+import com.myrts.blueprints.UnitType;
 import com.myrts.input.InputProcessor;
 import com.myrts.map.MapManager;
 import com.myrts.map.NavMeshRenderer;
 import com.myrts.systems.BuildingDestructionSystem;
+import com.myrts.systems.MovementSystem;
 import com.myrts.systems.ReaperSystem;
 import com.myrts.systems.RenderSystem;
 import com.myrts.entities.EntityFactory;
@@ -32,6 +34,7 @@ public class GameScreen implements Screen {
         this.game = game;
         this.engine = new PooledEngine();
         EntityFactory.initialize();
+        EntityFactory.createUnit(engine, 100, 100, UnitType.TANK);
 
         camera = new OrthographicCamera();
         camera.setToOrtho(false, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
@@ -48,6 +51,7 @@ public class GameScreen implements Screen {
     private void initializeSystems() {
         engine.addSystem(new RenderSystem(game.batch));
         engine.addSystem(new BuildingDestructionSystem(mapManager));
+        engine.addSystem(new MovementSystem());
 
         // Give the Reaper a high priority number so it runs LAST
         ReaperSystem reaper = new ReaperSystem();

@@ -10,13 +10,14 @@ import com.badlogic.gdx.InputAdapter;
 import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.math.Vector3;
+import com.badlogic.gdx.utils.Array;
 import com.myrts.blueprints.BuildingType;
-import com.myrts.components.BuildingComponent;
-import com.myrts.components.DestroyedComponent;
-import com.myrts.components.SpriteComponent;
-import com.myrts.components.TransformComponent;
+import com.myrts.components.*;
 import com.myrts.entities.EntityFactory;
+import com.myrts.map.FunnelSmoother;
 import com.myrts.map.MapManager;
+import com.myrts.map.TrianglePathfinder;
+import org.poly2tri.triangulation.delaunay.DelaunayTriangle;
 
 public class InputProcessor extends InputAdapter {
     private OrthographicCamera camera;
@@ -77,12 +78,64 @@ public class InputProcessor extends InputAdapter {
     public boolean touchDown(int screenX, int screenY, int pointer, int button) {
         if (button == 1) { // Right click
             if (placingMode) {
-                cancelPlacement();// Right click cancels placement and destroys the ghost            } else {
-            }
-            else{
-                panning = true;
-                lastX = screenX;
-                lastY = screenY;
+                cancelPlacement();
+            } else {
+                // Find where we clicked in the world
+                mouseWorldPos.set(screenX, screenY, 0);
+                camera.unproject(mouseWorldPos);
+
+                // 1. Check if any units are currently selected
+                Family family = Family.all(SelectableComponent.class, TransformComponent.class).get();
+                boolean unitIsSelected = false;
+
+                for (Entity entity : engine.getEntitiesFor(family)) {
+                    if (entity.getComponent(SelectableComponent.class).selected) {
+                        unitIsSelected = true;
+                        TransformComponent unitTransform = entity.getComponent(TransformComponent.class);
+
+                        // 2. Localization: Find Start and End triangles
+                        // Use the center of the unit's bounding box for accuracy
+                        float unitCenterX = unitTransform.position.x + (unitTransform.width / 2f);
+                        float unitCenterY = unitTransform.position.y + (unitTransform.height / 2f);
+
+                        DelaunayTriangle startTri = mapManager.getTriangleAt(unitCenterX, unitCenterY);
+                        DelaunayTriangle targetTri = mapManager.getTriangleAt(mouseWorldPos.x, mouseWorldPos.y);
+
+                        // 3. Run A* Pathfinding!
+                        if (startTri != null && targetTri != null) {
+                            Array<DelaunayTriangle> path = TrianglePathfinder.findPath(startTri, targetTri);
+
+                            if (path.size > 0) {
+                                // Fetch or create the PathComponent from the pool
+                                PathComponent pathComp = entity.getComponent(PathComponent.class);
+                                if (pathComp == null) {
+                                    pathComp = engine.createComponent(PathComponent.class);
+                                    entity.add(pathComp);
+                                }
+
+                                // Clear out any old path they were walking
+                                pathComp.waypoints.clear();
+                                pathComp.currentWaypointIndex = 0;
+
+                                Vector2 startPos = new Vector2(unitCenterX, unitCenterY);
+                                Vector2 endPos = new Vector2(mouseWorldPos.x, mouseWorldPos.y);
+
+                                pathComp.waypoints = FunnelSmoother.stringPull(path, startPos, endPos);
+
+                                System.out.println("Unit ordered to move preebly!");
+                            }
+                        } else {
+                            System.out.println("Cannot find path. Start or End is off the NavMesh.");
+                        }
+                    }
+                }
+
+                // If no units are selected, behave normally (pan camera)
+                if (!unitIsSelected) {
+                    panning = true;
+                    lastX = screenX;
+                    lastY = screenY;
+                }
             }
             return true;
         }
@@ -94,7 +147,8 @@ public class InputProcessor extends InputAdapter {
                 }
                 return true; // Consume input
             }
-
+            handleSelection();
+            return true;
             // Normal selection logic here (omitted for brevity)
         }
         return false;
@@ -251,6 +305,55 @@ public class InputProcessor extends InputAdapter {
         }
         placingMode = false;
         currentBlueprint = null;
+    }
+
+    private void handleSelection() {
+        // 1. Get Mouse World Position
+        mouseWorldPos.set(Gdx.input.getX(), Gdx.input.getY(), 0);
+        camera.unproject(mouseWorldPos);
+
+        // 2. Ask Ashley for all selectable entities
+        Family family = Family.all(SelectableComponent.class, TransformComponent.class, SpriteComponent.class).get();
+        ImmutableArray<Entity> selectables = engine.getEntitiesFor(family);
+
+        boolean clickedOnEntity = false;
+
+        // 3. Find if we clicked on any unit
+        for (Entity entity : selectables) {
+            TransformComponent transform = entity.getComponent(TransformComponent.class);
+            SelectableComponent selectable = entity.getComponent(SelectableComponent.class);
+            SpriteComponent sprite = entity.getComponent(SpriteComponent.class);
+
+            // Simple AABB collision check
+            if (mouseWorldPos.x >= transform.position.x &&
+                mouseWorldPos.x <= transform.position.x + transform.width &&
+                mouseWorldPos.y >= transform.position.y &&
+                mouseWorldPos.y <= transform.position.y + transform.height) {
+
+                // We clicked the unit!
+                selectable.selected = true;
+                clickedOnEntity = true;
+
+                // Tint it blue as a temporary visual indicator
+                sprite.color.set(0.5f, 0.5f, 1f, 1f);
+                System.out.println("Unit Selected!");
+
+                // Optional: break here if you only want to select one unit at a time when clicking a cluster
+            } else {
+                // We didn't click this specific unit, deselect it
+                selectable.selected = false;
+                sprite.color.set(1f, 1f, 1f, 1f); // Reset tint
+            }
+        }
+
+        // 4. If we clicked empty ground, deselect everything
+        if (!clickedOnEntity) {
+            for (Entity entity : selectables) {
+                entity.getComponent(SelectableComponent.class).selected = false;
+                entity.getComponent(SpriteComponent.class).color.set(1f, 1f, 1f, 1f); // Reset tint
+            }
+            System.out.println("Deselected all.");
+        }
     }
 
     // Getters for GameScreen rendering
