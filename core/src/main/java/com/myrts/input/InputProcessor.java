@@ -92,6 +92,8 @@ public class InputProcessor extends InputAdapter {
                     if (entity.getComponent(SelectableComponent.class).selected) {
                         unitIsSelected = true;
                         TransformComponent unitTransform = entity.getComponent(TransformComponent.class);
+                        float unitRadius = entity.getComponent(UnitComponent.class).radius;
+
 
                         // 2. Localization: Find Start and End triangles
                         // Use the center of the unit's bounding box for accuracy
@@ -101,9 +103,13 @@ public class InputProcessor extends InputAdapter {
                         DelaunayTriangle startTri = mapManager.getTriangleAt(unitCenterX, unitCenterY);
                         DelaunayTriangle targetTri = mapManager.getTriangleAt(mouseWorldPos.x, mouseWorldPos.y);
 
+                        Vector2 startPos = new Vector2(unitCenterX, unitCenterY);
+                        Vector2 endPos = new Vector2(mouseWorldPos.x, mouseWorldPos.y);
+
                         // 3. Run A* Pathfinding!
                         if (startTri != null && targetTri != null) {
-                            Array<DelaunayTriangle> path = TrianglePathfinder.findPath(startTri, targetTri);
+                            Array<DelaunayTriangle> path = TrianglePathfinder.findPath
+                                (startTri, targetTri, startPos, endPos, unitRadius);
 
                             if (path.size > 0) {
                                 // Fetch or create the PathComponent from the pool
@@ -117,10 +123,9 @@ public class InputProcessor extends InputAdapter {
                                 pathComp.waypoints.clear();
                                 pathComp.currentWaypointIndex = 0;
 
-                                Vector2 startPos = new Vector2(unitCenterX, unitCenterY);
-                                Vector2 endPos = new Vector2(mouseWorldPos.x, mouseWorldPos.y);
 
-                                pathComp.waypoints = FunnelSmoother.stringPull(path, startPos, endPos);
+
+                                pathComp.waypoints = FunnelSmoother.stringPull(path, startPos, endPos, unitRadius);
 
                                 System.out.println("Unit ordered to move preebly!");
                             }

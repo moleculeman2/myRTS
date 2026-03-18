@@ -1,7 +1,9 @@
 package com.myrts.map;
 
+import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.utils.Array;
 import org.poly2tri.triangulation.delaunay.DelaunayTriangle;
+import org.poly2tri.triangulation.TriangulationPoint;
 
 import java.util.HashMap;
 import java.util.HashSet;
@@ -9,18 +11,19 @@ import java.util.PriorityQueue;
 
 public class TrianglePathfinder {
 
-    // A simple wrapper to hold the A* scoring data for each triangle
     private static class NodeRecord implements Comparable<NodeRecord> {
         DelaunayTriangle triangle;
         float costSoFar;
         float estimatedTotalCost;
         DelaunayTriangle parent;
+        Vector2 entryPoint; // NEW: Tracks where the unit physically entered this triangle
 
-        public NodeRecord(DelaunayTriangle triangle, float costSoFar, float estimatedTotalCost, DelaunayTriangle parent) {
+        public NodeRecord(DelaunayTriangle triangle, float costSoFar, float estimatedTotalCost, DelaunayTriangle parent, Vector2 entryPoint) {
             this.triangle = triangle;
             this.costSoFar = costSoFar;
             this.estimatedTotalCost = estimatedTotalCost;
             this.parent = parent;
+            this.entryPoint = entryPoint;
         }
 
         @Override
@@ -29,10 +32,8 @@ public class TrianglePathfinder {
         }
     }
 
-    /**
-     * Finds the shortest path of triangles from the start to the end.
-     */
-    public static Array<DelaunayTriangle> findPath(DelaunayTriangle startTri, DelaunayTriangle endTri) {
+    public static Array<DelaunayTriangle> findPath
+        (DelaunayTriangle startTri, DelaunayTriangle endTri, Vector2 startPos, Vector2 endPos, float unitRadius) {
         Array<DelaunayTriangle> path = new Array<>();
         if (startTri == null || endTri == null) return path;
 
@@ -45,83 +46,173 @@ public class TrianglePathfinder {
         HashMap<DelaunayTriangle, NodeRecord> nodeRecords = new HashMap<>();
         HashSet<DelaunayTriangle> closedList = new HashSet<>();
 
-        // 1. Setup the starting node
-        NodeRecord startRecord = new NodeRecord(startTri, 0, heuristic(startTri, endTri), null);
+        NodeRecord startRecord = new NodeRecord(startTri, 0, heuristic(startPos, endPos), null, startPos);
         openList.add(startRecord);
         nodeRecords.put(startTri, startRecord);
 
         NodeRecord currentRecord = null;
+        NodeRecord closestRecord = startRecord; // For partial pathing
 
-        // 2. The main A* Loop
         while (!openList.isEmpty()) {
             currentRecord = openList.poll();
 
-            // Did we reach the destination?
             if (currentRecord.triangle == endTri) {
                 break;
             }
 
+            // Track the closest node in case we get blocked by a choke point
+            if (heuristic(currentRecord.entryPoint, endPos) < heuristic(closestRecord.entryPoint, endPos)) {
+                closestRecord = currentRecord;
+            }
+
             closedList.add(currentRecord.triangle);
 
-            // 3. Check all 3 neighbors of the current triangle
             for (int i = 0; i < 3; i++) {
                 DelaunayTriangle neighbor = currentRecord.triangle.neighbors[i];
 
-                // If neighbor is null (it's a wall/border) or we already evaluated it, skip it
                 if (neighbor == null || closedList.contains(neighbor)) continue;
 
-                // Cost is the physical distance between the centers of the two triangles
-                float edgeCost = distance(currentRecord.triangle, neighbor);
+                // --- CHOKE POINT CHECK ---
+                if (unitRadius > 0) {
+                    float portalWidth = getPortalWidth(currentRecord.triangle, neighbor);
+                    if (portalWidth < unitRadius * 2f) {
+                        continue;
+                    }
+                }
+
+                // --- NEW COST MATH: Portal-to-Portal ---
+                Vector2 exitPortalMidpoint = getPortalMidpoint(currentRecord.triangle, neighbor);
+
+                // Measure straight across the triangle from entry to exit!
+                float edgeCost = currentRecord.entryPoint.dst(exitPortalMidpoint);
                 float tentativeCost = currentRecord.costSoFar + edgeCost;
 
                 NodeRecord neighborRecord = nodeRecords.get(neighbor);
 
                 if (neighborRecord == null) {
-                    // First time seeing this neighbor, add it to the open list
-                    neighborRecord = new NodeRecord(neighbor, tentativeCost, tentativeCost + heuristic(neighbor, endTri), currentRecord.triangle);
-                    nodeRecords.put(neighbor, neighborRecord);
+                    neighborRecord = new NodeRecord(neighbor, tentativeCost, tentativeCost + heuristic(exitPortalMidpoint, endPos), currentRecord.triangle, exitPortalMidpoint);                    nodeRecords.put(neighbor, neighborRecord);
                     openList.add(neighborRecord);
                 } else if (tentativeCost < neighborRecord.costSoFar) {
-                    // We found a FASTER route to an already discovered neighbor! Update it.
                     neighborRecord.costSoFar = tentativeCost;
-                    neighborRecord.estimatedTotalCost = tentativeCost + heuristic(neighbor, endTri);
+                    neighborRecord.estimatedTotalCost = tentativeCost + heuristic(exitPortalMidpoint, endPos);
                     neighborRecord.parent = currentRecord.triangle;
+                    neighborRecord.entryPoint = exitPortalMidpoint;
 
-                    // Force the PriorityQueue to re-sort this specific record
                     openList.remove(neighborRecord);
                     openList.add(neighborRecord);
                 }
             }
         }
 
-        // 4. Trace the parents backwards to reconstruct the final path
-        if (currentRecord != null && currentRecord.triangle == endTri) {
-            while (currentRecord != null) {
-                path.insert(0, currentRecord.triangle); // Insert at index 0 to reverse the order
-                currentRecord = currentRecord.parent != null ? nodeRecords.get(currentRecord.parent) : null;
+        // Trace back from either the exact target, OR the closest point we could reach (Partial Pathing)
+        NodeRecord traceRecord = (currentRecord != null && currentRecord.triangle == endTri) ? currentRecord : closestRecord;
+
+        while (traceRecord != null) {
+            path.insert(0, traceRecord.triangle);
+            traceRecord = traceRecord.parent != null ? nodeRecords.get(traceRecord.parent) : null;
+        }
+
+        return path;
+    }
+
+    // --- HELPER METHODS ---
+
+    private static Vector2 getPortalMidpoint(DelaunayTriangle t1, DelaunayTriangle t2) {
+        TriangulationPoint shared1 = null, shared2 = null;
+        for (int j = 0; j < 3; j++) {
+            for (int k = 0; k < 3; k++) {
+                if (t1.points[j].equals(t2.points[k])) {
+                    if (shared1 == null) shared1 = t1.points[j];
+                    else shared2 = t1.points[j];
+                }
+            }
+        }
+        if (shared1 != null && shared2 != null) {
+            return new Vector2(
+                (shared1.getXf() + shared2.getXf()) / 2f,
+                (shared1.getYf() + shared2.getYf()) / 2f
+            );
+        }
+        return getCentroid(t1);
+    }
+
+    private static float getPortalWidth(DelaunayTriangle t1, DelaunayTriangle t2) {
+        TriangulationPoint shared1 = null, shared2 = null;
+        for (int j = 0; j < 3; j++) {
+            for (int k = 0; k < 3; k++) {
+                if (t1.points[j].equals(t2.points[k])) {
+                    if (shared1 == null) shared1 = t1.points[j];
+                    else shared2 = t1.points[j];
+                }
             }
         }
 
-        return path; // Returns empty array if no path is possible (e.g., trapped by walls)
+        if (shared1 != null && shared2 != null) {
+            float dx = shared1.getXf() - shared2.getXf();
+            float dy = shared1.getYf() - shared2.getYf();
+            float portalLength = (float) Math.sqrt(dx * dx + dy * dy);
+
+            int t1Neighbors = 0;
+            int t2Neighbors = 0;
+            for (int i = 0; i < 3; i++) {
+                if (t1.neighbors[i] != null) t1Neighbors++;
+                if (t2.neighbors[i] != null) t2Neighbors++;
+            }
+
+            if (t1Neighbors == 2 && t2Neighbors == 2) {
+                float clearance1 = getTriangleClearance(t1);
+                float clearance2 = getTriangleClearance(t2);
+                return Math.min(portalLength, Math.min(clearance1, clearance2));
+            } else {
+                return portalLength;
+            }
+        }
+        return 0f;
+    }
+
+    private static float getTriangleClearance(DelaunayTriangle tri) {
+        float minClearance = Float.MAX_VALUE;
+        boolean hasWall = false;
+
+        for (int i = 0; i < 3; i++) {
+            if (tri.neighbors[i] == null) {
+                hasWall = true;
+                TriangulationPoint wallP1 = tri.points[(i + 1) % 3];
+                TriangulationPoint wallP2 = tri.points[(i + 2) % 3];
+                TriangulationPoint opp = tri.points[i];
+
+                float dist = distPointToSegment(
+                    opp.getXf(), opp.getYf(),
+                    wallP1.getXf(), wallP1.getYf(),
+                    wallP2.getXf(), wallP2.getYf()
+                );
+                minClearance = Math.min(minClearance, dist);
+            }
+        }
+        return hasWall ? minClearance : Float.MAX_VALUE;
+    }
+
+    private static float distPointToSegment(float px, float py, float x1, float y1, float x2, float y2) {
+        float l2 = (x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1);
+        if (l2 == 0) return (float) Math.hypot(px - x1, py - y1);
+        float t = ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / l2;
+        t = Math.max(0, Math.min(1, t));
+        float projX = x1 + t * (x2 - x1);
+        float projY = y1 + t * (y2 - y1);
+        return (float) Math.hypot(px - projX, py - projY);
+    }
+
+    private static Vector2 getCentroid(DelaunayTriangle t) {
+        return new Vector2(
+            (t.points[0].getXf() + t.points[1].getXf() + t.points[2].getXf()) / 3f,
+            (t.points[0].getYf() + t.points[1].getYf() + t.points[2].getYf()) / 3f
+        );
     }
 
     /**
-     * Calculates the distance between the geometric centers (centroids) of two triangles.
+     * The A* Heuristic: Straight-line distance to the EXACT target coordinate.
      */
-    private static float distance(DelaunayTriangle t1, DelaunayTriangle t2) {
-        float x1 = (t1.points[0].getXf() + t1.points[1].getXf() + t1.points[2].getXf()) / 3f;
-        float y1 = (t1.points[0].getYf() + t1.points[1].getYf() + t1.points[2].getYf()) / 3f;
-        float x2 = (t2.points[0].getXf() + t2.points[1].getXf() + t2.points[2].getXf()) / 3f;
-        float y2 = (t2.points[0].getYf() + t2.points[1].getYf() + t2.points[2].getYf()) / 3f;
-
-        // Standard Euclidean distance formula: $d = \sqrt{(x_2 - x_1)^2 + (y_2 - y_1)^2}$
-        return (float) Math.sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1));
-    }
-
-    /**
-     * The A* Heuristic: Straight-line distance to the goal.
-     */
-    private static float heuristic(DelaunayTriangle current, DelaunayTriangle end) {
-        return distance(current, end);
+    private static float heuristic(Vector2 currentPoint, Vector2 endPos) {
+        return currentPoint.dst(endPos);
     }
 }

@@ -4,7 +4,7 @@ public enum UnitType {
     // Name(texturePath, health, speed, damage, range, width, height)
     INFANTRY("assets/unit.png", 100f, 6.0f, 10f, 1.0f, 32f, 32f, 16f),
     SCOUT("assets/unit.png", 60f, 5.0f, 5f, 2.0f, 20f, 20f, 10f), // Reusing unit.png for testing
-    TANK("assets/unit.png", 400f, 1.5f, 40f, 4.0f, 48f, 48f, 24f);
+    TANK("assets/unit.png", 400f, 4.5f, 40f, 4.0f, 48f, 48f, 24f);
 
     public final String texturePath;
     public final float maxHealth;
