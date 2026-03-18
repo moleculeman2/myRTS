@@ -105,7 +105,7 @@ public class EntityFactory {
         unit.add(sprite);
 
         UnitComponent unitComp = engine.createComponent(UnitComponent.class);
-        unitComp.init(type); // --- Initialize stats directly from Enum! ---
+        unitComp.init(type);
         unit.add(unitComp);
 
         SelectableComponent selectable = engine.createComponent(SelectableComponent.class);
