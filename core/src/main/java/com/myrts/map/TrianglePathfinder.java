@@ -74,15 +74,24 @@ public class TrianglePathfinder {
                 if (neighbor == null || closedList.contains(neighbor)) continue;
 
                 // --- CHOKE POINT CHECK ---
-                // --- CHOKE POINT CHECK ---
                 if (unitRadius > 0) {
-                    float portalWidth = getPortalWidth(currentRecord.triangle, neighbor);
-
-                    // Allow the unit to "squeeze" through gaps that are up to 5% smaller than it
                     float squeezeAllowance = (unitRadius * 2f) * 0.95f;
 
-                    if (portalWidth < squeezeAllowance) {
-                        continue; // The gap is truly blocked
+                    // Count how many exits this triangle has
+                    int neighborCount = 0;
+                    for (int n = 0; n < 3; n++) {
+                        if (neighbor.neighbors[n] != null) neighborCount++;
+                    }
+
+                    // 1. THE ROOM RULE: Is the triangle itself physically too narrow?
+                    // BYPASS: If neighborCount is 1, it's a dead-end corner. We allow entry!
+                    if (neighborCount > 1 && getTriangleClearance(neighbor) < squeezeAllowance) {
+                        continue;
+                    }
+
+                    // 2. THE DOOR RULE: Is the portal connecting them too small?
+                    if (getPortalWidth(currentRecord.triangle, neighbor) < squeezeAllowance) {
+                        continue;
                     }
                 }
 
@@ -174,22 +183,8 @@ public class TrianglePathfinder {
         if (shared1 != null && shared2 != null) {
             float dx = shared1.getXf() - shared2.getXf();
             float dy = shared1.getYf() - shared2.getYf();
-            float portalLength = (float) Math.sqrt(dx * dx + dy * dy);
-
-            int t1Neighbors = 0;
-            int t2Neighbors = 0;
-            for (int i = 0; i < 3; i++) {
-                if (t1.neighbors[i] != null) t1Neighbors++;
-                if (t2.neighbors[i] != null) t2Neighbors++;
-            }
-
-            if (t1Neighbors == 2 && t2Neighbors == 2) {
-                float clearance1 = getTriangleClearance(t1);
-                float clearance2 = getTriangleClearance(t2);
-                return Math.min(portalLength, Math.min(clearance1, clearance2));
-            } else {
-                return portalLength;
-            }
+            // Just return the literal physical width of the door!
+            return (float) Math.sqrt(dx * dx + dy * dy);
         }
         return 0f;
     }

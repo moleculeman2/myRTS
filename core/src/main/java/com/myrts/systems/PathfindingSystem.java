@@ -55,7 +55,13 @@ public class PathfindingSystem extends IteratingSystem {
 
             if (path.size > 0) {
                 if (path.peek() != targetTri) {
+                    // It was a partial path (island). Clamp to the edge of the nearest valid triangle.
                     clampToClosestValidPoint(endPos, path.peek(), unitRadius);
+                } else {
+                    // --- THE FIX: Wedge into the corner! ---
+                    // We successfully reached the target triangle. Ensure the exact click
+                    // isn't going to make the unit's body clip into the local walls.
+                    wedgeIntoCorner(endPos, path.peek(), unitRadius);
                 }
 
                 PathComponent pathComp = entity.getComponent(PathComponent.class);
@@ -114,5 +120,45 @@ public class PathfindingSystem extends IteratingSystem {
         }
 
         pos.set(closestPoint);
+    }
+
+    /**
+     * Ensures the final destination is at least 'unitRadius' away from any physical walls
+     * inside the final triangle, effectively "wedging" the unit snugly into corners.
+     */
+    private void wedgeIntoCorner(Vector2 pos, DelaunayTriangle tri, float unitRadius) {
+        if (unitRadius <= 0) return;
+
+        // Run 3 iterations to gently resolve sharp corners (pushing off wall A might push into wall B)
+        for (int iteration = 0; iteration < 3; iteration++) {
+            for (int i = 0; i < 3; i++) {
+                if (tri.neighbors[i] == null) { // This edge is a physical wall
+                    Vector2 p1 = new Vector2(tri.points[(i + 1) % 3].getXf(), tri.points[(i + 1) % 3].getYf());
+                    Vector2 p2 = new Vector2(tri.points[(i + 2) % 3].getXf(), tri.points[(i + 2) % 3].getYf());
+
+                    Vector2 nearestPoint = new Vector2();
+                    com.badlogic.gdx.math.Intersector.nearestSegmentPoint(p1, p2, pos, nearestPoint);
+
+                    float dist = pos.dst(nearestPoint);
+
+                    // If we are closer to the wall than our radius, we are clipping!
+                    if (dist < unitRadius) {
+                        Vector2 pushOut = new Vector2(pos).sub(nearestPoint);
+
+                        // Fallback if the click was exactly ON the wall line
+                        if (pushOut.len2() < 0.001f) {
+                            float cx = (tri.points[0].getXf() + tri.points[1].getXf() + tri.points[2].getXf()) / 3f;
+                            float cy = (tri.points[0].getYf() + tri.points[1].getYf() + tri.points[2].getYf()) / 3f;
+                            pushOut.set(cx, cy).sub(nearestPoint);
+                        }
+
+                        pushOut.nor();
+                        // Push it exactly to the radius boundary (plus 1% padding for float safety)
+                        float pushAmount = (unitRadius - dist) * 1.01f;
+                        pos.add(pushOut.scl(pushAmount));
+                    }
+                }
+            }
+        }
     }
 }

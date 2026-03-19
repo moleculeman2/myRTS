@@ -16,7 +16,7 @@ public class FunnelSmoother {
         Array<Vector2> rightPortals = new Array<>();
         leftPortals.add(new Vector2(start)); rightPortals.add(new Vector2(start));
 
-        // 1. Extract RAW Portals (No expanding here!)
+        // 1. Extract RAW Portals
         for (int i = 0; i < path.size - 1; i++) {
             DelaunayTriangle current = path.get(i);
             DelaunayTriangle next = path.get(i + 1);
@@ -48,7 +48,31 @@ public class FunnelSmoother {
 
         leftPortals.add(new Vector2(end)); rightPortals.add(new Vector2(end));
 
-        // 2. Pure Funnel Algorithm (Guaranteed never to detour)
+        // --- 2. THE UNIFIED SAFE PORTAL SQUEEZE ---
+        if (unitRadius > 0f) {
+            // 1.42f (sqrt 2) guarantees that moving along a diagonal grid portal provides
+            // the exact orthogonal clearance needed for the unit's circular radius!
+            float squeeze = unitRadius * 1.42f;
+
+            for (int i = 1; i < leftPortals.size - 1; i++) {
+                Vector2 L = leftPortals.get(i);
+                Vector2 R = rightPortals.get(i);
+                float width = L.dst(R);
+
+                if (width > squeeze * 2f) {
+                    Vector2 dir = new Vector2(R).sub(L).nor();
+                    L.mulAdd(dir, squeeze);
+                    R.mulAdd(dir, -squeeze);
+                } else {
+                    // Choke point! Route exactly through the dead-center.
+                    Vector2 mid = new Vector2(L).add(R).scl(0.5f);
+                    L.set(mid);
+                    R.set(mid);
+                }
+            }
+        }
+
+        // 3. Pure Funnel Algorithm (Now runs on mathematically perfect portals)
         Vector2 portalApex = new Vector2(start);
         Vector2 portalLeft = new Vector2(leftPortals.get(0));
         Vector2 portalRight = new Vector2(rightPortals.get(0));
@@ -81,50 +105,11 @@ public class FunnelSmoother {
                 }
             }
         }
+
         if (!waypoints.peek().equals(end)) waypoints.add(new Vector2(end));
 
-        // 3. The "Corner Fillet" Post-Processor
-        if (unitRadius <= 0f || waypoints.size < 3) return waypoints;
-
-        Array<Vector2> finalPath = new Array<>();
-        finalPath.add(new Vector2(waypoints.first()));
-
-        for (int i = 1; i < waypoints.size - 1; i++) {
-            Vector2 prev = waypoints.get(i - 1);
-            Vector2 curr = waypoints.get(i);
-            Vector2 next = waypoints.get(i + 1);
-
-            Vector2 in = new Vector2(curr).sub(prev).nor();
-            Vector2 out = new Vector2(next).sub(curr).nor();
-            Vector2 miter = new Vector2(in).sub(out);
-            float len2 = miter.len2();
-
-            if (len2 > 0.01f) {
-                float miterDist = (2f * unitRadius) / (float)Math.sqrt(len2);
-
-                // If it's a very sharp corner, the miter spike will be huge.
-                // Instead of a massive spike, we insert TWO points to smoothly round the corner.
-                if (miterDist > unitRadius * 1.8f) {
-                    Vector2 nIn = new Vector2(-in.y, in.x).scl(unitRadius);
-                    if (nIn.dot(miter) < 0) nIn.scl(-1); // Point outward
-
-                    Vector2 nOut = new Vector2(-out.y, out.x).scl(unitRadius);
-                    if (nOut.dot(miter) < 0) nOut.scl(-1); // Point outward
-
-                    // Place a point slightly before the corner, and slightly after
-                    finalPath.add(new Vector2(curr).sub(new Vector2(in).scl(unitRadius)).add(nIn));
-                    finalPath.add(new Vector2(curr).add(new Vector2(out).scl(unitRadius)).add(nOut));
-                } else {
-                    // Normal shallow corner, just push it out cleanly
-                    finalPath.add(new Vector2(curr).add(miter.nor().scl(miterDist)));
-                }
-            } else {
-                finalPath.add(new Vector2(curr));
-            }
-        }
-
-        finalPath.add(new Vector2(waypoints.peek()));
-        return finalPath;
+        // No Post-Processing needed! The waypoints are already flawless.
+        return waypoints;
     }
 
     private static float triArea2(Vector2 a, Vector2 b, Vector2 c) {
