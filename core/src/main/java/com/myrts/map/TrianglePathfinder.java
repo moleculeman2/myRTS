@@ -213,6 +213,6 @@ public class TrianglePathfinder {
      * The A* Heuristic: Straight-line distance to the EXACT target coordinate.
      */
     private static float heuristic(Vector2 currentPoint, Vector2 endPos) {
-        return currentPoint.dst(endPos);
+        return currentPoint.dst(endPos) * 1.1f;
     }
 }

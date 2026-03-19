@@ -80,58 +80,20 @@ public class InputProcessor extends InputAdapter {
             if (placingMode) {
                 cancelPlacement();
             } else {
-                // Find where we clicked in the world
                 mouseWorldPos.set(screenX, screenY, 0);
                 camera.unproject(mouseWorldPos);
 
-                // 1. Check if any units are currently selected
                 Family family = Family.all(SelectableComponent.class, TransformComponent.class).get();
                 boolean unitIsSelected = false;
 
                 for (Entity entity : engine.getEntitiesFor(family)) {
                     if (entity.getComponent(SelectableComponent.class).selected) {
                         unitIsSelected = true;
-                        TransformComponent unitTransform = entity.getComponent(TransformComponent.class);
-                        float unitRadius = entity.getComponent(UnitComponent.class).radius;
 
-
-                        // 2. Localization: Find Start and End triangles
-                        // Use the center of the unit's bounding box for accuracy
-                        float unitCenterX = unitTransform.position.x + (unitTransform.width / 2f);
-                        float unitCenterY = unitTransform.position.y + (unitTransform.height / 2f);
-
-                        DelaunayTriangle startTri = mapManager.getTriangleAt(unitCenterX, unitCenterY);
-                        DelaunayTriangle targetTri = mapManager.getTriangleAt(mouseWorldPos.x, mouseWorldPos.y);
-
-                        Vector2 startPos = new Vector2(unitCenterX, unitCenterY);
-                        Vector2 endPos = new Vector2(mouseWorldPos.x, mouseWorldPos.y);
-
-                        // 3. Run A* Pathfinding!
-                        if (startTri != null && targetTri != null) {
-                            Array<DelaunayTriangle> path = TrianglePathfinder.findPath
-                                (startTri, targetTri, startPos, endPos, unitRadius);
-
-                            if (path.size > 0) {
-                                // Fetch or create the PathComponent from the pool
-                                PathComponent pathComp = entity.getComponent(PathComponent.class);
-                                if (pathComp == null) {
-                                    pathComp = engine.createComponent(PathComponent.class);
-                                    entity.add(pathComp);
-                                }
-
-                                // Clear out any old path they were walking
-                                pathComp.waypoints.clear();
-                                pathComp.currentWaypointIndex = 0;
-
-
-
-                                pathComp.waypoints = FunnelSmoother.stringPull(path, startPos, endPos, unitRadius);
-
-                                System.out.println("Unit ordered to move preebly!");
-                            }
-                        } else {
-                            System.out.println("Cannot find path. Start or End is off the NavMesh.");
-                        }
+                        // Give the unit its marching orders!
+                        TargetDestinationComponent destComp = engine.createComponent(TargetDestinationComponent.class);
+                        destComp.target.set(mouseWorldPos.x, mouseWorldPos.y);
+                        entity.add(destComp);
                     }
                 }
 

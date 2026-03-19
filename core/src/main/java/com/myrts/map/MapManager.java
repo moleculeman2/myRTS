@@ -471,6 +471,33 @@ public class MapManager {
         return s >= 0 && t >= 0 && (1 - s - t) >= 0;
     }
 
+    /**
+     * Finds the closest valid NavMesh triangle to a coordinate that is currently off the mesh.
+     */
+    public DelaunayTriangle getClosestTriangle(float x, float y) {
+        DelaunayTriangle closestTri = null;
+        float minDst2 = Float.MAX_VALUE;
+
+        // Iterate through whatever list holds your final parsed NavMesh triangles
+        for (DelaunayTriangle tri : this.navMeshTriangles) {
+            // Calculate the center of the triangle
+            float cx = (tri.points[0].getXf() + tri.points[1].getXf() + tri.points[2].getXf()) / 3f;
+            float cy = (tri.points[0].getYf() + tri.points[1].getYf() + tri.points[2].getYf()) / 3f;
+
+            // Measure squared distance (faster than exact distance)
+            float dx = cx - x;
+            float dy = cy - y;
+            float dst2 = dx * dx + dy * dy;
+
+            if (dst2 < minDst2) {
+                minDst2 = dst2;
+                closestTri = tri;
+            }
+        }
+
+        return closestTri;
+    }
+
     public void createEntitiesFromMap(Engine engine) {
         // Process object layers to create entities
         MapLayer objectLayer = map.getLayers().get("Objects");
