@@ -1,5 +1,6 @@
 package com.myrts.map;
 
+import com.badlogic.gdx.math.Intersector;
 import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.utils.Array;
 import org.poly2tri.triangulation.delaunay.DelaunayTriangle;
@@ -73,30 +74,35 @@ public class TrianglePathfinder {
                 if (neighbor == null || closedList.contains(neighbor)) continue;
 
                 // --- CHOKE POINT CHECK ---
+                // --- CHOKE POINT CHECK ---
                 if (unitRadius > 0) {
                     float portalWidth = getPortalWidth(currentRecord.triangle, neighbor);
-                    if (portalWidth < unitRadius * 2f) {
-                        continue;
+
+                    // Allow the unit to "squeeze" through gaps that are up to 5% smaller than it
+                    float squeezeAllowance = (unitRadius * 2f) * 0.95f;
+
+                    if (portalWidth < squeezeAllowance) {
+                        continue; // The gap is truly blocked
                     }
                 }
 
-                // --- NEW COST MATH: Portal-to-Portal ---
-                Vector2 exitPortalMidpoint = getPortalMidpoint(currentRecord.triangle, neighbor);
+                Vector2 exitPoint = getOptimalCrossingPoint(currentRecord.entryPoint, currentRecord.triangle, neighbor, endPos);
 
-                // Measure straight across the triangle from entry to exit!
-                float edgeCost = currentRecord.entryPoint.dst(exitPortalMidpoint);
+                // Measure the exact distance to the optimal crossing point!
+                float edgeCost = currentRecord.entryPoint.dst(exitPoint);
                 float tentativeCost = currentRecord.costSoFar + edgeCost;
 
                 NodeRecord neighborRecord = nodeRecords.get(neighbor);
 
                 if (neighborRecord == null) {
-                    neighborRecord = new NodeRecord(neighbor, tentativeCost, tentativeCost + heuristic(exitPortalMidpoint, endPos), currentRecord.triangle, exitPortalMidpoint);                    nodeRecords.put(neighbor, neighborRecord);
+                    neighborRecord = new NodeRecord(neighbor, tentativeCost, tentativeCost + heuristic(exitPoint, endPos), currentRecord.triangle, exitPoint);
+                    nodeRecords.put(neighbor, neighborRecord);
                     openList.add(neighborRecord);
                 } else if (tentativeCost < neighborRecord.costSoFar) {
                     neighborRecord.costSoFar = tentativeCost;
-                    neighborRecord.estimatedTotalCost = tentativeCost + heuristic(exitPortalMidpoint, endPos);
+                    neighborRecord.estimatedTotalCost = tentativeCost + heuristic(exitPoint, endPos);
                     neighborRecord.parent = currentRecord.triangle;
-                    neighborRecord.entryPoint = exitPortalMidpoint;
+                    neighborRecord.entryPoint = exitPoint;
 
                     openList.remove(neighborRecord);
                     openList.add(neighborRecord);
@@ -117,7 +123,10 @@ public class TrianglePathfinder {
 
     // --- HELPER METHODS ---
 
-    private static Vector2 getPortalMidpoint(DelaunayTriangle t1, DelaunayTriangle t2) {
+    /**
+     * Theta* Approximation: Finds the optimal point to cross a portal to minimize zig-zagging.
+     */
+    private static Vector2 getOptimalCrossingPoint(Vector2 entryPoint, DelaunayTriangle t1, DelaunayTriangle t2, Vector2 goalPos) {
         TriangulationPoint shared1 = null, shared2 = null;
         for (int j = 0; j < 3; j++) {
             for (int k = 0; k < 3; k++) {
@@ -127,12 +136,27 @@ public class TrianglePathfinder {
                 }
             }
         }
+
         if (shared1 != null && shared2 != null) {
-            return new Vector2(
-                (shared1.getXf() + shared2.getXf()) / 2f,
-                (shared1.getYf() + shared2.getYf()) / 2f
-            );
+            Vector2 p1 = new Vector2(shared1.getXf(), shared1.getYf());
+            Vector2 p2 = new Vector2(shared2.getXf(), shared2.getYf());
+
+            Vector2 intersection = new Vector2();
+
+            // 1. The Ideal Case: A straight line to the goal passes right through this portal.
+            if (Intersector.intersectSegments(entryPoint, goalPos, p1, p2, intersection)) {
+                return intersection;
+            }
+
+            // 2. The Corner Case: The direct line misses the portal (blocked by a wall).
+            // Instead of falling back to the zig-zagging midpoint, we find the point on the
+            // portal that is physically closest to the goal. This naturally hugs corners!
+            Vector2 nearest = new Vector2();
+            Intersector.nearestSegmentPoint(p1, p2, goalPos, nearest);
+            return nearest;
         }
+
+        // Failsafe for degenerate triangles
         return getCentroid(t1);
     }
 
