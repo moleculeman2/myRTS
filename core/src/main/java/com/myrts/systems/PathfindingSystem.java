@@ -48,14 +48,14 @@ public class PathfindingSystem extends IteratingSystem {
 
         if (startTri != null && targetTri != null) {
             if (clickedBlockedTile) {
-                clampToTriangleCenter(endPos, targetTri);
+                clampToClosestValidPoint(endPos, targetTri, unitRadius);
             }
 
             Array<DelaunayTriangle> path = TrianglePathfinder.findPath(startTri, targetTri, startPos, endPos, unitRadius);
 
             if (path.size > 0) {
                 if (path.peek() != targetTri) {
-                    clampToTriangleCenter(endPos, path.peek());
+                    clampToClosestValidPoint(endPos, path.peek(), unitRadius);
                 }
 
                 PathComponent pathComp = entity.getComponent(PathComponent.class);
@@ -76,9 +76,43 @@ public class PathfindingSystem extends IteratingSystem {
         entity.remove(TargetDestinationComponent.class);
     }
 
-    private void clampToTriangleCenter(Vector2 pos, DelaunayTriangle tri) {
-        float cx = (tri.points[0].getXf() + tri.points[1].getXf() + tri.points[2].getXf()) / 3f;
-        float cy = (tri.points[0].getYf() + tri.points[1].getYf() + tri.points[2].getYf()) / 3f;
-        pos.set(cx, cy);
+    /**
+     * Finds the exact point on the triangle's perimeter closest to the blocked click,
+     * then pushes it inward by the unit's radius so it perfectly hugs the wall without clipping!
+     */
+    private void clampToClosestValidPoint(Vector2 pos, DelaunayTriangle tri, float unitRadius) {
+        Vector2 originalPos = new Vector2(pos);
+        float minDst2 = Float.MAX_VALUE;
+        Vector2 closestPoint = new Vector2();
+        Vector2 tempPoint = new Vector2();
+
+        // 1. Find the absolute closest point on the 3 edges of the triangle
+        for (int i = 0; i < 3; i++) {
+            Vector2 p1 = new Vector2(tri.points[i].getXf(), tri.points[i].getYf());
+            Vector2 p2 = new Vector2(tri.points[(i + 1) % 3].getXf(), tri.points[(i + 1) % 3].getYf());
+
+            com.badlogic.gdx.math.Intersector.nearestSegmentPoint(p1, p2, originalPos, tempPoint);
+            float dst2 = originalPos.dst2(tempPoint);
+
+            if (dst2 < minDst2) {
+                minDst2 = dst2;
+                closestPoint.set(tempPoint);
+            }
+        }
+
+        // 2. Push the point inward away from the wall so the unit's radius fits!
+        if (unitRadius > 0) {
+            float cx = (tri.points[0].getXf() + tri.points[1].getXf() + tri.points[2].getXf()) / 3f;
+            float cy = (tri.points[0].getYf() + tri.points[1].getYf() + tri.points[2].getYf()) / 3f;
+            Vector2 centroid = new Vector2(cx, cy);
+
+            // Create a vector pointing from the wall edge toward the safe center of the triangle
+            Vector2 pushDirection = new Vector2(centroid).sub(closestPoint).nor();
+
+            // Push the point inward by the radius + 10% padding so it doesn't snag the wall
+            closestPoint.mulAdd(pushDirection, unitRadius * 1.1f);
+        }
+
+        pos.set(closestPoint);
     }
 }
