@@ -472,25 +472,44 @@ public class MapManager {
     }
 
     /**
-     * Finds the closest valid NavMesh triangle to a coordinate that is currently off the mesh.
+     * Finds the closest NavMesh triangle that is physically large enough for the unit to stand in.
      */
-    public DelaunayTriangle getClosestTriangle(float x, float y) {
+    public DelaunayTriangle getClosestWalkableTriangle(float x, float y, float unitRadius) {
         DelaunayTriangle closestTri = null;
         float minDst2 = Float.MAX_VALUE;
+        Vector2 targetPos = new Vector2(x, y);
+        Vector2 tempPoint = new Vector2();
 
-        // Iterate through whatever list holds your final parsed NavMesh triangles
-        for (DelaunayTriangle tri : this.navMeshTriangles) {
-            // Calculate the center of the triangle
-            float cx = (tri.points[0].getXf() + tri.points[1].getXf() + tri.points[2].getXf()) / 3f;
-            float cy = (tri.points[0].getYf() + tri.points[1].getYf() + tri.points[2].getYf()) / 3f;
+        // The same safe squeeze allowance used by our A* algorithm
+        float squeezeAllowance = (unitRadius * 2f) * 0.95f;
 
-            // Measure squared distance (faster than exact distance)
-            float dx = cx - x;
-            float dy = cy - y;
-            float dst2 = dx * dx + dy * dy;
+        for (DelaunayTriangle tri : navMeshTriangles) { // Use your actual list name
 
-            if (dst2 < minDst2) {
-                minDst2 = dst2;
+            // --- BUG 2 FIX: The Room Rule ---
+            // If the unit is too fat for this triangle, ignore it completely!
+            // This stops the unit from choosing a fallback inside a tight corridor.
+            if (unitRadius > 0 && TrianglePathfinder.getTriangleClearance(tri) < squeezeAllowance) {
+                continue;
+            }
+
+            // --- BUG 1 FIX: Edge Distance ---
+            // Measure the distance from the click to the closest edge of the triangle, NOT the centroid!
+            float closestDist2ToTri = Float.MAX_VALUE;
+
+            for (int i = 0; i < 3; i++) {
+                Vector2 p1 = new Vector2(tri.points[i].getXf(), tri.points[i].getYf());
+                Vector2 p2 = new Vector2(tri.points[(i + 1) % 3].getXf(), tri.points[(i + 1) % 3].getYf());
+
+                Intersector.nearestSegmentPoint(p1, p2, targetPos, tempPoint);
+                float dst2 = targetPos.dst2(tempPoint);
+
+                if (dst2 < closestDist2ToTri) {
+                    closestDist2ToTri = dst2;
+                }
+            }
+
+            if (closestDist2ToTri < minDst2) {
+                minDst2 = closestDist2ToTri;
                 closestTri = tri;
             }
         }

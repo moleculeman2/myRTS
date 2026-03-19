@@ -42,7 +42,7 @@ public class PathfindingSystem extends IteratingSystem {
 
         boolean clickedBlockedTile = false;
         if (targetTri == null) {
-            targetTri = mapManager.getClosestTriangle(intent.target.x, intent.target.y);
+            targetTri = mapManager.getClosestWalkableTriangle(intent.target.x, intent.target.y, unitRadius);
             clickedBlockedTile = true;
         }
 

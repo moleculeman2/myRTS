@@ -189,7 +189,7 @@ public class TrianglePathfinder {
         return 0f;
     }
 
-    private static float getTriangleClearance(DelaunayTriangle tri) {
+    public static float getTriangleClearance(DelaunayTriangle tri) {
         float minClearance = Float.MAX_VALUE;
         boolean hasWall = false;
 
