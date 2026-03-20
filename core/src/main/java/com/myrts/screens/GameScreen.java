@@ -52,6 +52,7 @@ public class GameScreen implements Screen {
         engine.addSystem(new BuildingDestructionSystem(mapManager));
         engine.addSystem(new MovementSystem(mapManager));
         engine.addSystem(new PathfindingSystem(mapManager));
+        engine.addSystem(new PathDebugRenderSystem(shapeRenderer, camera));
 
         // Give the Reaper a high priority number so it runs LAST
         ReaperSystem reaper = new ReaperSystem();
