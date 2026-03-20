@@ -47,21 +47,24 @@ public class PathfindingSystem extends IteratingSystem {
         }
 
         if (startTri != null && targetTri != null) {
+            // --- NEW: Pre-Clamp the destination if they clicked a building ---
             if (clickedBlockedTile) {
-                clampToClosestValidPoint(endPos, targetTri, unitRadius);
+                snapToTriangleEdge(endPos, targetTri);
+                relaxAwayFromWalls(endPos, targetTri, unitRadius);
             }
 
             Array<DelaunayTriangle> path = TrianglePathfinder.findPath(startTri, targetTri, startPos, endPos, unitRadius);
 
             if (path.size > 0) {
                 if (path.peek() != targetTri) {
-                    // It was a partial path (island). Clamp to the edge of the nearest valid triangle.
-                    clampToClosestValidPoint(endPos, path.peek(), unitRadius);
-                } else {
-                    // --- THE FIX: Wedge into the corner! ---
-                    // We successfully reached the target triangle. Ensure the exact click
-                    // isn't going to make the unit's body clip into the local walls.
-                    wedgeIntoCorner(endPos, path.peek(), unitRadius);
+                    // --- NEW: Partial Path (Island) Fallback ---
+                    snapToTriangleEdge(endPos, path.peek());
+                    relaxAwayFromWalls(endPos, path.peek(), unitRadius);
+                } else if (!clickedBlockedTile) {
+                    // --- NEW: Perfect Path ---
+                    // Even if the click was safe, we run the solver to ensure they didn't
+                    // click so close to a wall that their shoulders will clip it!
+                    relaxAwayFromWalls(endPos, path.peek(), unitRadius);
                 }
 
                 PathComponent pathComp = entity.getComponent(PathComponent.class);
@@ -83,82 +86,94 @@ public class PathfindingSystem extends IteratingSystem {
     }
 
     /**
-     * Finds the exact point on the triangle's perimeter closest to the blocked click,
-     * then pushes it inward by the unit's radius so it perfectly hugs the wall without clipping!
+     * If the user clicks off the mesh, this securely snaps the destination to the absolute
+     * closest walkable edge, and nudges it microscopically inward so it's mathematically valid.
      */
-    private void clampToClosestValidPoint(Vector2 pos, DelaunayTriangle tri, float unitRadius) {
+    private void snapToTriangleEdge(Vector2 pos, DelaunayTriangle tri) {
         Vector2 originalPos = new Vector2(pos);
         float minDst2 = Float.MAX_VALUE;
-        Vector2 closestPoint = new Vector2();
-        Vector2 tempPoint = new Vector2();
+        Vector2 closestEdgePoint = new Vector2();
 
-        // 1. Find the absolute closest point on the 3 edges of the triangle
         for (int i = 0; i < 3; i++) {
             Vector2 p1 = new Vector2(tri.points[i].getXf(), tri.points[i].getYf());
             Vector2 p2 = new Vector2(tri.points[(i + 1) % 3].getXf(), tri.points[(i + 1) % 3].getYf());
 
+            Vector2 tempPoint = new Vector2();
             com.badlogic.gdx.math.Intersector.nearestSegmentPoint(p1, p2, originalPos, tempPoint);
             float dst2 = originalPos.dst2(tempPoint);
 
             if (dst2 < minDst2) {
                 minDst2 = dst2;
-                closestPoint.set(tempPoint);
+                closestEdgePoint.set(tempPoint);
             }
         }
 
-        // 2. Push the point inward away from the wall so the unit's radius fits!
-        if (unitRadius > 0) {
-            float cx = (tri.points[0].getXf() + tri.points[1].getXf() + tri.points[2].getXf()) / 3f;
-            float cy = (tri.points[0].getYf() + tri.points[1].getYf() + tri.points[2].getYf()) / 3f;
-            Vector2 centroid = new Vector2(cx, cy);
+        pos.set(closestEdgePoint);
 
-            // Create a vector pointing from the wall edge toward the safe center of the triangle
-            Vector2 pushDirection = new Vector2(centroid).sub(closestPoint).nor();
-
-            // Push the point inward by the radius + 10% padding so it doesn't snag the wall
-            closestPoint.mulAdd(pushDirection, unitRadius * 1.1f);
-        }
-
-        pos.set(closestPoint);
+        // Nudge it slightly toward the centroid so floating point errors don't place it out of bounds
+        float cx = (tri.points[0].getXf() + tri.points[1].getXf() + tri.points[2].getXf()) / 3f;
+        float cy = (tri.points[0].getYf() + tri.points[1].getYf() + tri.points[2].getYf()) / 3f;
+        Vector2 centroid = new Vector2(cx, cy);
+        Vector2 nudge = new Vector2(centroid).sub(pos).nor().scl(0.1f);
+        pos.add(nudge);
     }
 
     /**
-     * Ensures the final destination is at least 'unitRadius' away from any physical walls
-     * inside the final triangle, effectively "wedging" the unit snugly into corners.
+     * THE RELAXATION SOLVER: Gathers every physical wall within 3 grid rings, and acts
+     * like a physics engine to shove the destination point away until the unit perfectly fits.
      */
-    private void wedgeIntoCorner(Vector2 pos, DelaunayTriangle tri, float unitRadius) {
+    private void relaxAwayFromWalls(Vector2 pos, DelaunayTriangle tri, float unitRadius) {
         if (unitRadius <= 0) return;
 
-        // Run 3 iterations to gently resolve sharp corners (pushing off wall A might push into wall B)
-        for (int iteration = 0; iteration < 3; iteration++) {
-            for (int i = 0; i < 3; i++) {
-                if (tri.neighbors[i] == null) { // This edge is a physical wall
-                    Vector2 p1 = new Vector2(tri.points[(i + 1) % 3].getXf(), tri.points[(i + 1) % 3].getYf());
-                    Vector2 p2 = new Vector2(tri.points[(i + 2) % 3].getXf(), tri.points[(i + 2) % 3].getYf());
+        Array<Vector2[]> walls = new Array<>();
+        java.util.HashSet<DelaunayTriangle> visited = new java.util.HashSet<>();
+        Array<DelaunayTriangle> queue = new Array<>();
+        queue.add(tri);
+        visited.add(tri);
 
-                    Vector2 nearestPoint = new Vector2();
-                    com.badlogic.gdx.math.Intersector.nearestSegmentPoint(p1, p2, pos, nearestPoint);
-
-                    float dist = pos.dst(nearestPoint);
-
-                    // If we are closer to the wall than our radius, we are clipping!
-                    if (dist < unitRadius) {
-                        Vector2 pushOut = new Vector2(pos).sub(nearestPoint);
-
-                        // Fallback if the click was exactly ON the wall line
-                        if (pushOut.len2() < 0.001f) {
-                            float cx = (tri.points[0].getXf() + tri.points[1].getXf() + tri.points[2].getXf()) / 3f;
-                            float cy = (tri.points[0].getYf() + tri.points[1].getYf() + tri.points[2].getYf()) / 3f;
-                            pushOut.set(cx, cy).sub(nearestPoint);
-                        }
-
-                        pushOut.nor();
-                        // Push it exactly to the radius boundary (plus 1% padding for float safety)
-                        float pushAmount = (unitRadius - dist) * 1.01f;
-                        pos.add(pushOut.scl(pushAmount));
+        // 1. Flood-fill outward to gather all nearby walls (3 rings deep is plenty)
+        int head = 0;
+        for (int r = 0; r < 3; r++) {
+            int currentQueueSize = queue.size;
+            while (head < currentQueueSize) {
+                DelaunayTriangle current = queue.get(head++);
+                for (int i = 0; i < 3; i++) {
+                    if (current.neighbors[i] == null) {
+                        // It's a physical wall!
+                        Vector2 p1 = new Vector2(current.points[(i + 1) % 3].getXf(), current.points[(i + 1) % 3].getYf());
+                        Vector2 p2 = new Vector2(current.points[(i + 2) % 3].getXf(), current.points[(i + 2) % 3].getYf());
+                        walls.add(new Vector2[]{p1, p2});
+                    } else if (!visited.contains(current.neighbors[i])) {
+                        visited.add(current.neighbors[i]);
+                        queue.add(current.neighbors[i]);
                     }
                 }
             }
+        }
+
+        // 2. The Physics Solver (Iteratively massage the point away from all local walls)
+        float safeRadius = unitRadius * 1.05f; // 5% padding
+        for (int iter = 0; iter < 10; iter++) {
+            boolean moved = false;
+            for (Vector2[] wall : walls) {
+                Vector2 nearest = new Vector2();
+                com.badlogic.gdx.math.Intersector.nearestSegmentPoint(wall[0], wall[1], pos, nearest);
+                float dist = pos.dst(nearest);
+
+                if (dist < safeRadius) {
+                    Vector2 push = new Vector2(pos).sub(nearest);
+                    if (push.len2() < 0.001f) {
+                        float cx = (tri.points[0].getXf() + tri.points[1].getXf() + tri.points[2].getXf()) / 3f;
+                        float cy = (tri.points[0].getYf() + tri.points[1].getYf() + tri.points[2].getYf()) / 3f;
+                        push.set(cx, cy).sub(nearest); // Fallback push toward centroid
+                    }
+                    // Shove the point perfectly out of the collision radius
+                    push.nor().scl(safeRadius - dist);
+                    pos.add(push);
+                    moved = true;
+                }
+            }
+            if (!moved) break; // If it's safe from all walls, we're done early!
         }
     }
 }

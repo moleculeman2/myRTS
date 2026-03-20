@@ -169,24 +169,91 @@ public class TrianglePathfinder {
         return getCentroid(t1);
     }
 
+    /**
+     * Calculates the true physical bottleneck of a portal. If the portal spans across a corridor,
+     * it measures the strict perpendicular distance between the opposing walls.
+     */
     private static float getPortalWidth(DelaunayTriangle t1, DelaunayTriangle t2) {
-        TriangulationPoint shared1 = null, shared2 = null;
+        TriangulationPoint p1 = null, p2 = null;
         for (int j = 0; j < 3; j++) {
             for (int k = 0; k < 3; k++) {
                 if (t1.points[j].equals(t2.points[k])) {
-                    if (shared1 == null) shared1 = t1.points[j];
-                    else shared2 = t1.points[j];
+                    if (p1 == null) p1 = t1.points[j];
+                    else p2 = t1.points[j];
                 }
             }
         }
 
-        if (shared1 != null && shared2 != null) {
-            float dx = shared1.getXf() - shared2.getXf();
-            float dy = shared1.getYf() - shared2.getYf();
-            // Just return the literal physical width of the door!
-            return (float) Math.sqrt(dx * dx + dy * dy);
+        if (p1 != null && p2 != null) {
+            float p1x = p1.getXf(), p1y = p1.getYf();
+            float p2x = p2.getXf(), p2y = p2.getYf();
+            float literalLength = (float) Math.hypot(p1x - p2x, p1y - p2y);
+
+            // 1. Gather all physical walls touching these two triangles (Max 4 walls)
+            float[] wallsX1 = new float[4];
+            float[] wallsY1 = new float[4];
+            float[] wallsX2 = new float[4];
+            float[] wallsY2 = new float[4];
+            int wallCount = 0;
+
+            wallCount = extractWalls(t1, wallsX1, wallsY1, wallsX2, wallsY2, wallCount);
+            wallCount = extractWalls(t2, wallsX1, wallsY1, wallsX2, wallsY2, wallCount);
+
+            boolean p1TouchesWall = false;
+            boolean p2TouchesWall = false;
+
+            for (int i = 0; i < wallCount; i++) {
+                if (isPointOnWall(p1x, p1y, wallsX1[i], wallsY1[i], wallsX2[i], wallsY2[i])) p1TouchesWall = true;
+                if (isPointOnWall(p2x, p2y, wallsX1[i], wallsY1[i], wallsX2[i], wallsY2[i])) p2TouchesWall = true;
+            }
+
+            // 2. THE FIX: If the portal bridges two different walls, measure the true corridor width!
+            if (p1TouchesWall && p2TouchesWall) {
+                float minClearance = literalLength;
+
+                for (int i = 0; i < wallCount; i++) {
+                    boolean touchesP1 = isPointOnWall(p1x, p1y, wallsX1[i], wallsY1[i], wallsX2[i], wallsY2[i]);
+                    boolean touchesP2 = isPointOnWall(p2x, p2y, wallsX1[i], wallsY1[i], wallsX2[i], wallsY2[i]);
+
+                    // If this wall touches P1, measure the perpendicular distance to P2
+                    if (touchesP1 && !touchesP2) {
+                        float dist = distPointToSegment(p2x, p2y, wallsX1[i], wallsY1[i], wallsX2[i], wallsY2[i]);
+                        minClearance = Math.min(minClearance, dist);
+                    }
+                    // If this wall touches P2, measure the perpendicular distance to P1
+                    if (touchesP2 && !touchesP1) {
+                        float dist = distPointToSegment(p1x, p1y, wallsX1[i], wallsY1[i], wallsX2[i], wallsY2[i]);
+                        minClearance = Math.min(minClearance, dist);
+                    }
+                }
+                return minClearance;
+            }
+
+            // 3. If it's in an open field, or just tracing alongside one wall, the literal length is safe
+            return literalLength;
         }
         return 0f;
+    }
+
+    // --- High-Performance Helpers ---
+
+    private static int extractWalls(DelaunayTriangle tri, float[] x1, float[] y1, float[] x2, float[] y2, int count) {
+        for (int i = 0; i < 3; i++) {
+            if (tri.neighbors[i] == null) { // It has no neighbor, so it's a physical wall
+                x1[count] = tri.points[(i + 1) % 3].getXf();
+                y1[count] = tri.points[(i + 1) % 3].getYf();
+                x2[count] = tri.points[(i + 2) % 3].getXf();
+                y2[count] = tri.points[(i + 2) % 3].getYf();
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private static boolean isPointOnWall(float px, float py, float x1, float y1, float x2, float y2) {
+        float eps = 0.001f;
+        return (Math.abs(px - x1) < eps && Math.abs(py - y1) < eps) ||
+            (Math.abs(px - x2) < eps && Math.abs(py - y2) < eps);
     }
 
     public static float getTriangleClearance(DelaunayTriangle tri) {

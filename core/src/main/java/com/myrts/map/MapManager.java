@@ -14,6 +14,7 @@ import com.badlogic.gdx.maps.tiled.TmxMapLoader;
 import com.badlogic.gdx.maps.tiled.renderers.OrthogonalTiledMapRenderer;
 import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.utils.Array;
+import com.badlogic.gdx.utils.ObjectSet;
 import com.myrts.components.ResourceComponent;
 import com.myrts.components.TransformComponent;
 import org.poly2tri.Poly2Tri;
@@ -31,6 +32,8 @@ import static com.myrts.map.ContourTracer.simplifyPolygon;
 import static com.myrts.map.NavMeshClipper.mergeTrianglesAndBuilding;
 
 public class MapManager {
+
+    private static final int RETRIANGULATION_DEPTH = 1;
 
     private TiledMap map;
     private OrthogonalTiledMapRenderer renderer;
@@ -160,6 +163,11 @@ public class MapManager {
         // Update the polygon (this recalculates bounding boxes internally without allocating memory)
         footprintPoly.setVertices(footprintVertices);
 
+        // Use an ObjectSet to prevent duplicates and infinite neighbor loops
+        ObjectSet<DelaunayTriangle> visitedTriangles = new ObjectSet<>();
+        Array<DelaunayTriangle> currentFrontier = new Array<>();
+
+        // --- 1. Find the initial footprint triangles (Layer 0) ---
         for (DelaunayTriangle tri : navMeshTriangles) {
             triVertices[0] = tri.points[0].getXf();
             triVertices[1] = tri.points[0].getYf();
@@ -171,8 +179,34 @@ public class MapManager {
             triPoly.setVertices(triVertices);
 
             if (Intersector.overlapConvexPolygons(footprintPoly, triPoly)) {
-                intersectingTriangles.add(tri);
+                visitedTriangles.add(tri);
+                currentFrontier.add(tri);
             }
+        }
+
+        // --- 2. Expand outward by 2 layers (Neighbors, and Neighbors of Neighbors) ---
+        for (int layer = 0; layer < RETRIANGULATION_DEPTH; layer++) {
+            Array<DelaunayTriangle> nextFrontier = new Array<>();
+
+            for (DelaunayTriangle tri : currentFrontier) {
+                // Check all 3 edges of the current triangle
+                for (int i = 0; i < 3; i++) {
+                    DelaunayTriangle neighbor = tri.neighbors[i];
+
+                    // If the neighbor exists and hasn't been added to our set yet
+                    if (neighbor != null && !visitedTriangles.contains(neighbor)) {
+                        visitedTriangles.add(neighbor);
+                        nextFrontier.add(neighbor); // Queue it up to check ITS neighbors next loop
+                    }
+                }
+            }
+            // Move outward to the next ring
+            currentFrontier = nextFrontier;
+        }
+
+        // --- 3. Convert the ObjectSet back to the expected Array output ---
+        for (DelaunayTriangle tri : visitedTriangles) {
+            intersectingTriangles.add(tri);
         }
 
         return intersectingTriangles;
