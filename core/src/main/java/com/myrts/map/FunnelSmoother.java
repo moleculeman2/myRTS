@@ -50,9 +50,11 @@ public class FunnelSmoother {
 
         // --- 2. THE UNIFIED SAFE PORTAL SQUEEZE ---
         if (unitRadius > 0f) {
-            // 1.42f (sqrt 2) guarantees that moving along a diagonal grid portal provides
-            // the exact orthogonal clearance needed for the unit's circular radius!
-            float squeeze = unitRadius * 1.42f;
+            // THE FIX: Revert this to 1.01f!
+            // We no longer need the Funnel to predict safe corner distances because our
+            // Relaxation Solver physically pushes the waypoints out in post-processing.
+            // This 1% buffer simply ensures the string bends enough to generate a waypoint.
+            float squeeze = unitRadius * 1.01f;
 
             for (int i = 1; i < leftPortals.size - 1; i++) {
                 Vector2 L = leftPortals.get(i);

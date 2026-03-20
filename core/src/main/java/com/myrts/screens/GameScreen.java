@@ -32,6 +32,8 @@ public class GameScreen implements Screen {
         this.engine = new PooledEngine();
         EntityFactory.initialize();
         EntityFactory.createUnit(engine, 100, 100, UnitType.TANK);
+        EntityFactory.createUnit(engine, 150, 100, UnitType.INFANTRY);
+        EntityFactory.createUnit(engine, 100, 150, UnitType.SCOUT);
 
         camera = new OrthographicCamera();
         camera.setToOrtho(false, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
