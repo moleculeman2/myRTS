@@ -50,11 +50,11 @@ public class FunnelSmoother {
 
         // --- 2. THE UNIFIED SAFE PORTAL SQUEEZE ---
         if (unitRadius > 0f) {
-            // THE FIX: Revert this to 1.01f!
-            // We no longer need the Funnel to predict safe corner distances because our
-            // Relaxation Solver physically pushes the waypoints out in post-processing.
-            // This 1% buffer simply ensures the string bends enough to generate a waypoint.
-            float squeeze = unitRadius * 1.01f;
+            // THE FIX: Do NOT multiply by unitRadius here!
+            // We want the waypoints to land practically exactly on the physical corner
+            // so our PathfindingSystem's normal-accumulation solver can perfectly bisect it.
+            // This tiny 0.01f epsilon simply prevents floating-point collinearity skipping.
+            float squeeze = 0.01f;
 
             for (int i = 1; i < leftPortals.size - 1; i++) {
                 Vector2 L = leftPortals.get(i);
@@ -66,14 +66,12 @@ public class FunnelSmoother {
                     L.mulAdd(dir, squeeze);
                     R.mulAdd(dir, -squeeze);
                 } else {
-                    // Choke point! Route exactly through the dead-center.
                     Vector2 mid = new Vector2(L).add(R).scl(0.5f);
                     L.set(mid);
                     R.set(mid);
                 }
             }
         }
-
         // 3. Pure Funnel Algorithm (Now runs on mathematically perfect portals)
         Vector2 portalApex = new Vector2(start);
         Vector2 portalLeft = new Vector2(leftPortals.get(0));

@@ -96,12 +96,113 @@ public class PathfindingSystem extends IteratingSystem {
                 pathComp.currentWaypointIndex = 0;
                 pathComp.waypoints = FunnelSmoother.stringPull(path, startPos, endPos, unitRadius);
 
-                // 7. Relax Intermediate Corners
+                // --- THE "THICK LINE OF SIGHT" FIX ---
+                // 6.5 Gather all physical corner vertices from the A* path triangles
+                java.util.HashSet<org.poly2tri.triangulation.TriangulationPoint> wallPoints = new java.util.HashSet<>();
+                for (DelaunayTriangle tri : path) {
+                    for (int i = 0; i < 3; i++) {
+                        if (tri.neighbors[i] == null) {
+                            // This edge is a physical wall. Log its vertices!
+                            wallPoints.add(tri.points[(i + 1) % 3]);
+                            wallPoints.add(tri.points[(i + 2) % 3]);
+                        }
+                    }
+                }
+
+                float safeRadius = unitRadius + 0.005f;
+                boolean pathModified;
+                int injectionLimit = 20; // Safeguard against weird float-precision infinite loops
+
+                // Repeatedly scan and bend the path until it clears all corners
+                do {
+                    pathModified = false;
+                    for (int i = 0; i < pathComp.waypoints.size - 1; i++) {
+                        Vector2 wp1 = pathComp.waypoints.get(i);
+                        Vector2 wp2 = pathComp.waypoints.get(i + 1);
+
+                        Vector2 worstClipPoint = null;
+                        float worstClipDepth = -1;
+
+                        // Check if this line segment grazes any wall vertices
+                        for (org.poly2tri.triangulation.TriangulationPoint tp : wallPoints) {
+                            Vector2 v = new Vector2(tp.getXf(), tp.getYf());
+                            Vector2 nearest = new Vector2();
+                            com.badlogic.gdx.math.Intersector.nearestSegmentPoint(wp1, wp2, v, nearest);
+
+                            // We only care if it clips strictly in the middle of the segment
+                            if (nearest.dst(wp1) > 0.01f && nearest.dst(wp2) > 0.01f) {
+                                float dist = v.dst(nearest);
+                                if (dist < safeRadius) {
+                                    float depth = safeRadius - dist;
+                                    if (depth > worstClipDepth) {
+                                        worstClipDepth = depth;
+                                        worstClipPoint = nearest;
+                                    }
+                                }
+                            }
+                        }
+
+                        if (worstClipPoint != null) {
+                            // 1. Inject the point where the unit would have clipped the corner
+                            pathComp.waypoints.insert(i + 1, worstClipPoint);
+
+                            // 2. Immediately push it out to the safe equilibrium radius
+                            DelaunayTriangle tri = mapManager.getTriangleAt(worstClipPoint.x, worstClipPoint.y);
+                            if (tri == null) tri = mapManager.getClosestWalkableTriangle(worstClipPoint.x, worstClipPoint.y, unitRadius);
+                            if (tri != null) {
+                                relaxAwayFromWalls(pathComp.waypoints.get(i + 1), tri, unitRadius);
+                            }
+
+                            // 3. Restart the scan so we can verify the two newly bent segments
+                            pathModified = true;
+                            break;
+                        }
+                    }
+                    injectionLimit--;
+                } while (pathModified && injectionLimit > 0);
+
+                // 7. Relax the ORIGINAL Intermediate Corners (from the Funnel)
                 for (int i = 1; i < pathComp.waypoints.size - 1; i++) {
                     Vector2 wp = pathComp.waypoints.get(i);
                     DelaunayTriangle wpTri = mapManager.getTriangleAt(wp.x, wp.y);
                     if (wpTri == null) wpTri = mapManager.getClosestWalkableTriangle(wp.x, wp.y, unitRadius);
                     if (wpTri != null) relaxAwayFromWalls(wp, wpTri, unitRadius);
+                }
+
+                // --- THE "ALREADY THERE" PRUNING FIX ---
+                // 8. Clean up redundant starting waypoints
+                float clearRadius = unitRadius * 1.5f; // Slightly larger than the unit's body
+
+                // If the path has multiple points, and we are practically already sitting on
+                // the first waypoint (or it spawned slightly behind us), throw it in the trash!
+                while (pathComp.waypoints.size > 1) {
+                    Vector2 firstWaypoint = pathComp.waypoints.get(0);
+
+                    if (startPos.dst(firstWaypoint) < clearRadius) {
+                        // The waypoint is underneath or slightly behind the unit. Remove it!
+                        pathComp.waypoints.removeIndex(0);
+                    } else {
+                        // The first waypoint is sufficiently far ahead in front of us.
+                        break;
+                    }
+                }
+
+                // --- THE "MICRO-STUTTER" FIX (Deduplication) ---
+                // 9. Clean up clustered waypoints caused by physics convergence
+                // We run this after all relaxing and pruning is completely finished.
+                for (int i = 0; i < pathComp.waypoints.size - 1; i++) {
+                    Vector2 current = pathComp.waypoints.get(i);
+                    Vector2 next = pathComp.waypoints.get(i + 1);
+
+                    // If the physics solver pushed two waypoints into the same physical space
+                    // (e.g., closer than half the unit's radius), delete the redundant one!
+                    if (current.dst(next) < unitRadius * 0.5f) {
+                        pathComp.waypoints.removeIndex(i + 1);
+
+                        // We must step back one index because the list just shrank,
+                        // and we need to compare the current point to the NEW next point!
+                        i--;
+                    }
                 }
             }
         }
@@ -122,15 +223,14 @@ public class PathfindingSystem extends IteratingSystem {
         queue.add(tri);
         visited.add(tri);
 
-        // 1. Flood-fill outward to gather all nearby walls (3 rings deep)
+        // 1. Deep Flood Fill (8 Rings)
         int head = 0;
-        for (int r = 0; r < 3; r++) {
+        for (int r = 0; r < 8; r++) {
             int currentQueueSize = queue.size;
             while (head < currentQueueSize) {
                 DelaunayTriangle current = queue.get(head++);
                 for (int i = 0; i < 3; i++) {
                     if (current.neighbors[i] == null) {
-                        // It's a physical wall!
                         Vector2 p1 = new Vector2(current.points[(i + 1) % 3].getXf(), current.points[(i + 1) % 3].getYf());
                         Vector2 p2 = new Vector2(current.points[(i + 2) % 3].getXf(), current.points[(i + 2) % 3].getYf());
                         walls.add(new Vector2[]{p1, p2});
@@ -142,48 +242,52 @@ public class PathfindingSystem extends IteratingSystem {
             }
         }
 
-        // 2. The Physics Solver
-        float safeRadius = unitRadius * 1.05f; // 5% padding
+        // 2. The Physics Solver (Bounded Planes + Equilibrium Averaging)
+        float safeRadius = unitRadius + 0.005f;
 
-        // Pre-calculate centroid to determine which side of the wall is "inside" the triangle
-        float cx = (tri.points[0].getXf() + tri.points[1].getXf() + tri.points[2].getXf()) / 3f;
-        float cy = (tri.points[0].getYf() + tri.points[1].getYf() + tri.points[2].getYf()) / 3f;
-        Vector2 centroid = new Vector2(cx, cy);
+        for (int iter = 0; iter < 15; iter++) {
+            Vector2 totalPush = new Vector2();
+            int pushCount = 0;
 
-        for (int iter = 0; iter < 10; iter++) {
-            boolean moved = false;
             for (Vector2[] wall : walls) {
-                Vector2 nearest = new Vector2();
-                com.badlogic.gdx.math.Intersector.nearestSegmentPoint(wall[0], wall[1], pos, nearest);
-                float dist = pos.dst(nearest);
+                Vector2 wallDir = new Vector2(wall[1]).sub(wall[0]).nor();
+                Vector2 safeNormal = new Vector2(-wallDir.y, wallDir.x);
 
-                if (dist < safeRadius) {
-                    Vector2 push = new Vector2(pos).sub(nearest);
+                Vector2 toPos = new Vector2(pos).sub(wall[0]);
+                float planeDist = toPos.dot(safeNormal);
 
-                    // --- THE FLAWLESS ZERO-DISTANCE FIX ---
-                    if (dist < 0.001f) {
-                        // The point is EXACTLY on the wall line. Calculate the Surface Normal!
-                        Vector2 wallDir = new Vector2(wall[1]).sub(wall[0]).nor();
-                        Vector2 normal = new Vector2(-wallDir.y, wallDir.x);
+                // Check if we are violating the perpendicular plane
+                if (planeDist < safeRadius) {
 
-                        // Ensure the normal points INWARD toward the safe center of the triangle
-                        Vector2 toCenter = new Vector2(centroid).sub(nearest);
-                        if (normal.dot(toCenter) < 0) {
-                            normal.scl(-1);
+                    float segmentLen = wall[0].dst(wall[1]);
+                    // Project the unit's position along the length of the wall itself
+                    float proj = toPos.dot(wallDir);
+
+                    // THE FIX: Bounded Planes!
+                    // The plane ONLY pushes if the unit is directly parallel to the segment,
+                    // or within a tiny 'safeRadius' wrap-around distance of its corners.
+                    if (proj > -safeRadius && proj < segmentLen + safeRadius) {
+                        float penetration = safeRadius - planeDist;
+
+                        // Prevent massive teleportation from stray geometry bounds
+                        if (penetration > 0 && penetration < safeRadius * 2f) {
+                            Vector2 push = new Vector2(safeNormal).scl(penetration);
+                            totalPush.add(push);
+                            pushCount++;
                         }
-                        push.set(normal);
-                    } else {
-                        push.nor();
                     }
-                    // --------------------------------------
-
-                    // Shove the point perfectly out of the collision radius
-                    push.scl(safeRadius - dist);
-                    pos.add(push);
-                    moved = true;
                 }
             }
-            if (!moved) break; // If it's safe from all walls, we're done early!
+
+            if (pushCount > 0) {
+                // THE EQUILIBRIUM FIX: Averaging the pushes ensures that if a unit is
+                // crammed into a 1x1 triangle smaller than itself, it gracefully
+                // settles in the exact center instead of ping-ponging indefinitely.
+                totalPush.scl(1f / pushCount);
+                pos.add(totalPush);
+            } else {
+                break; // Perfectly clear of all relevant local geometry!
+            }
         }
     }
 

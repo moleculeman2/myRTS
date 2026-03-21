@@ -34,6 +34,8 @@ public class InputProcessor extends InputAdapter {
     private Entity ghostEntity = null;
     private Vector3 mouseWorldPos = new Vector3();
     private Vector2 ghostPos = new Vector2(); // The bottom-left world position of the ghost
+    private long lastCommandTime = 0;
+    private Vector2 lastCommandPos = new Vector2();
 
     private BuildingType currentBlueprint = null;
 
@@ -73,7 +75,7 @@ public class InputProcessor extends InputAdapter {
         }
         return false;
     }
-
+    
     @Override
     public boolean touchDown(int screenX, int screenY, int pointer, int button) {
         if (button == 1) { // Right click
@@ -82,6 +84,20 @@ public class InputProcessor extends InputAdapter {
             } else {
                 mouseWorldPos.set(screenX, screenY, 0);
                 camera.unproject(mouseWorldPos);
+
+                // --- 1. DEBOUNCE LOGIC ---
+                long currentTime = com.badlogic.gdx.utils.TimeUtils.millis();
+                Vector2 currentClickPos = new Vector2(mouseWorldPos.x, mouseWorldPos.y);
+
+                // If they clicked within 1.5 tiles AND it has been less than 3000ms (3 seconds)
+                if (currentTime - lastCommandTime < 3000 && lastCommandPos.dst(currentClickPos) < 1.5f) {
+                    return true; // Ignore the spam click, but consume the input
+                }
+
+                // This is a valid, deliberate command. Update the trackers!
+                lastCommandTime = currentTime;
+                lastCommandPos.set(currentClickPos);
+                // -------------------------
 
                 Family family = Family.all(SelectableComponent.class, TransformComponent.class).get();
                 boolean unitIsSelected = false;
@@ -92,7 +108,8 @@ public class InputProcessor extends InputAdapter {
 
                         // Give the unit its marching orders!
                         TargetDestinationComponent destComp = engine.createComponent(TargetDestinationComponent.class);
-                        destComp.target.set(mouseWorldPos.x, mouseWorldPos.y);
+                        // Use the currentClickPos so we don't allocate more vectors
+                        destComp.target.set(currentClickPos);
                         entity.add(destComp);
                     }
                 }
