@@ -225,7 +225,7 @@ public class PathfindingSystem extends IteratingSystem {
 
         // 1. Deep Flood Fill (8 Rings)
         int head = 0;
-        for (int r = 0; r < 8; r++) {
+        for (int r = 0; r < 4; r++) {
             int currentQueueSize = queue.size;
             while (head < currentQueueSize) {
                 DelaunayTriangle current = queue.get(head++);

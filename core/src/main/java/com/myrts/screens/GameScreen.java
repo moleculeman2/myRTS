@@ -8,6 +8,7 @@ import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
+import com.badlogic.gdx.math.Vector2;
 import com.myrts.GameBase;
 import com.myrts.blueprints.BuildingType;
 import com.myrts.blueprints.UnitType;
@@ -34,6 +35,9 @@ public class GameScreen implements Screen {
         EntityFactory.createUnit(engine, 100, 100, UnitType.TANK);
         EntityFactory.createUnit(engine, 150, 100, UnitType.INFANTRY);
         EntityFactory.createUnit(engine, 100, 150, UnitType.SCOUT);
+        for (int i = 0; i < 50; i++){
+            EntityFactory.createUnit(engine, 150, 120 + (i*5), UnitType.INFANTRY);
+        }
 
         camera = new OrthographicCamera();
         camera.setToOrtho(false, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
@@ -53,7 +57,7 @@ public class GameScreen implements Screen {
         engine.addSystem(new MovementSystem(mapManager));
         engine.addSystem(new PathfindingSystem(mapManager));
         engine.addSystem(new PathDebugRenderSystem(shapeRenderer, camera));
-
+        engine.addSystem(new SpatialUpdateSystem(mapManager.spatialGrid));
         // Give the Reaper a high priority number so it runs LAST
         ReaperSystem reaper = new ReaperSystem();
         reaper.priority = 100;
@@ -85,8 +89,23 @@ public class GameScreen implements Screen {
         NavMeshRenderer.drawNeighborTickMarks(shapeRenderer, mapManager.getNavMeshTriangles());
         //NavMeshRenderer.drawCentroidLinks(shapeRenderer, mapManager.getNavMeshTriangles());
 
-        NavMeshRenderer.drawEdges(shapeRenderer, mapManager.dEdges);
+        //NavMeshRenderer.drawEdges(shapeRenderer, mapManager.dEdges);
         //NavMeshRenderer.drawDelaunay(shapeRenderer, mapManager.dTriangles, Color.RED);
+
+        // --- NEW: Draw the Selection Box ---
+        if (inputProcessor.isMultiSelecting()) {
+            shapeRenderer.setColor(Color.GREEN);
+            Vector2 start = inputProcessor.getSelectionStart();
+            Vector2 end = inputProcessor.getSelectionEnd();
+
+            float minX = Math.min(start.x, end.x);
+            float maxX = Math.max(start.x, end.x);
+            float minY = Math.min(start.y, end.y);
+            float maxY = Math.max(start.y, end.y);
+
+            // shapeRenderer.rect(x, y, width, height)
+            shapeRenderer.rect(minX, minY, maxX - minX, maxY - minY);
+        }
 
         shapeRenderer.end();
     }

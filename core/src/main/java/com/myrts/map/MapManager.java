@@ -37,6 +37,7 @@ public class MapManager {
 
     private TiledMap map;
     private OrthogonalTiledMapRenderer renderer;
+    public SpatialPartitionGrid spatialGrid;
     private int mapWidth;
     private int mapHeight;
     private int tileWidth;
@@ -69,6 +70,8 @@ public class MapManager {
         tileWidth = props.get("tilewidth", Integer.class);
         tileHeight = props.get("tileheight", Integer.class);
 
+        spatialGrid = new SpatialPartitionGrid(mapWidth, mapHeight, tileWidth, tileHeight);
+
         // Initialize collision map
         collisionMap = new boolean[mapWidth][mapHeight];
         initializeCollisionMap();
@@ -96,6 +99,7 @@ public class MapManager {
                     }
                 }
                 navMeshTriangles.add(triangle);
+                spatialGrid.addTriangle(triangle);
             }
         }
         //linkNavMeshNeighbors();
@@ -167,8 +171,27 @@ public class MapManager {
         ObjectSet<DelaunayTriangle> visitedTriangles = new ObjectSet<>();
         Array<DelaunayTriangle> currentFrontier = new Array<>();
 
+        // --- OPTIMIZATION: Only search the cells that the footprint overlaps ---
+        int startCellX = Math.max(0, spatialGrid.getCellX(minX));
+        int startCellY = Math.max(0, spatialGrid.getCellY(minY));
+        int endCellX = Math.min(spatialGrid.getCellX(maxX), getMapWidth() / 10); // Or your max cols
+        int endCellY = Math.min(spatialGrid.getCellY(maxY), getMapHeight() / 10); // Or your max rows
+
+        // Collect unique triangles from the overlapping cells
+        ObjectSet<DelaunayTriangle> localizedTriangles = new ObjectSet<>();
+        for (int cx = startCellX; cx <= endCellX; cx++) {
+            for (int cy = startCellY; cy <= endCellY; cy++) {
+                SpatialPartitionGrid.SpatialCell cell = spatialGrid.getCellAt(cx * spatialGrid.getCellWidth(), cy * spatialGrid.getCellHeight());
+                if (cell != null) {
+                    for (DelaunayTriangle tri : cell.triangles) {
+                        localizedTriangles.add(tri);
+                    }
+                }
+            }
+        }
+
         // --- 1. Find the initial footprint triangles (Layer 0) ---
-        for (DelaunayTriangle tri : navMeshTriangles) {
+        for (DelaunayTriangle tri : localizedTriangles) {
             triVertices[0] = tri.points[0].getXf();
             triVertices[1] = tri.points[0].getYf();
             triVertices[2] = tri.points[1].getXf();
@@ -416,6 +439,10 @@ public class MapManager {
         // 7. If we made it here, triangulation succeeded! Stitch the newly baked space.
         if (freshlyGeneratedTriangles.size > 0 && outBorderTriangles.size > 0) {
             stitchNewTriangles(freshlyGeneratedTriangles, outBorderTriangles);
+            spatialGrid.clearAllTriangles();
+            for(DelaunayTriangle tri : navMeshTriangles) {
+                spatialGrid.addTriangle(tri);
+            }
         }
 
         return true; // Success!
@@ -471,14 +498,19 @@ public class MapManager {
      * @return The DelaunayTriangle containing the point, or null if the point is off the mesh (in a wall/void).
      */
     public DelaunayTriangle getTriangleAt(float worldX, float worldY) {
-        if (navMeshTriangles == null) return null;
+        if (spatialGrid == null) return null;
 
-        for (DelaunayTriangle tri : navMeshTriangles) {
+        // 1. Get the specific cell the coordinate is inside
+        SpatialPartitionGrid.SpatialCell cell = spatialGrid.getCellAt(worldX, worldY);
+        if (cell == null) return null; // Clicked out of bounds
+
+        // 2. Only check the triangles registered to this single cell
+        for (DelaunayTriangle tri : cell.triangles) {
             if (isPointInTriangle(worldX, worldY, tri)) {
                 return tri;
             }
         }
-        return null; // The player clicked on a blocked tile or outside the map!
+        return null;
     }
 
     /**
@@ -517,7 +549,27 @@ public class MapManager {
         // The same safe squeeze allowance used by our A* algorithm
         float squeezeAllowance = (unitRadius * 2f) * 0.95f;
 
-        for (DelaunayTriangle tri : navMeshTriangles) { // Use your actual list name
+        // --- OPTIMIZATION: Check a 3x3 cell grid (30x30 tiles) around the target ---
+        int centerCX = spatialGrid.getCellX(x);
+        int centerCY = spatialGrid.getCellY(y);
+
+        ObjectSet<DelaunayTriangle> searchArea = new ObjectSet<>();
+
+        for(int dx = -1; dx <= 1; dx++) {
+            for(int dy = -1; dy <= 1; dy++) {
+                float checkX = (centerCX + dx) * spatialGrid.getCellWidth();
+                float checkY = (centerCY + dy) * spatialGrid.getCellHeight();
+                SpatialPartitionGrid.SpatialCell cell = spatialGrid.getCellAt(checkX, checkY);
+
+                if (cell != null) {
+                    for (DelaunayTriangle tri : cell.triangles) {
+                        searchArea.add(tri);
+                    }
+                }
+            }
+        }
+
+        for (DelaunayTriangle tri : searchArea) { // Use your actual list name
 
             // --- BUG 2 FIX: The Room Rule ---
             // If the unit is too fat for this triangle, ignore it completely!

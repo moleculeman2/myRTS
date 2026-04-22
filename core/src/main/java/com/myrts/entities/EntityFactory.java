@@ -65,6 +65,11 @@ public class EntityFactory {
         buildingComp.init(type); // Set the health and type here!
         building.add(buildingComp);
 
+        SpatialComponent spatial = engine.createComponent(SpatialComponent.class);
+        // It defaults to -1, -1. The SpatialUpdateSystem will calculate its actual
+        // starting cell and register it to the MapManager's grid on the first frame!
+        building.add(spatial);
+
         engine.addEntity(building);
         return building;
     }
@@ -113,6 +118,11 @@ public class EntityFactory {
         // Set selection radius based on unit size
         selectable.selectionRadius = Math.max(type.width, type.height) / 2f;
         unit.add(selectable);
+
+        SpatialComponent spatial = engine.createComponent(SpatialComponent.class);
+        // It defaults to -1, -1. The SpatialUpdateSystem will calculate its actual
+        // starting cell and register it to the MapManager's grid on the first frame!
+        unit.add(spatial);
 
         engine.addEntity(unit);
         return unit;

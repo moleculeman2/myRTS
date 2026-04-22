@@ -10,14 +10,11 @@ import com.badlogic.gdx.InputAdapter;
 import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.math.Vector3;
-import com.badlogic.gdx.utils.Array;
 import com.myrts.blueprints.BuildingType;
 import com.myrts.components.*;
 import com.myrts.entities.EntityFactory;
-import com.myrts.map.FunnelSmoother;
 import com.myrts.map.MapManager;
-import com.myrts.map.TrianglePathfinder;
-import org.poly2tri.triangulation.delaunay.DelaunayTriangle;
+import com.myrts.map.SpatialPartitionGrid;
 
 public class InputProcessor extends InputAdapter {
     private OrthographicCamera camera;
@@ -28,12 +25,17 @@ public class InputProcessor extends InputAdapter {
     private boolean panning = false;
     private float lastX, lastY;
 
+    // Multi-Selection variables
+    private boolean multiSelecting = false;
+    private Vector2 selectionStart = new Vector2();
+    private Vector2 selectionEnd = new Vector2();
+
     // Placement Mode variables
     private boolean placingMode = false;
     private boolean canBuild = false;
     private Entity ghostEntity = null;
     private Vector3 mouseWorldPos = new Vector3();
-    private Vector2 ghostPos = new Vector2(); // The bottom-left world position of the ghost
+    private Vector2 ghostPos = new Vector2();
     private long lastCommandTime = 0;
     private Vector2 lastCommandPos = new Vector2();
 
@@ -44,8 +46,6 @@ public class InputProcessor extends InputAdapter {
         this.mapManager = mapManager;
         this.engine = engine;
     }
-
-
 
     @Override
     public boolean keyDown(int keycode) {
@@ -75,7 +75,7 @@ public class InputProcessor extends InputAdapter {
         }
         return false;
     }
-    
+
     @Override
     public boolean touchDown(int screenX, int screenY, int pointer, int button) {
         if (button == 1) { // Right click
@@ -85,19 +85,15 @@ public class InputProcessor extends InputAdapter {
                 mouseWorldPos.set(screenX, screenY, 0);
                 camera.unproject(mouseWorldPos);
 
-                // --- 1. DEBOUNCE LOGIC ---
                 long currentTime = com.badlogic.gdx.utils.TimeUtils.millis();
                 Vector2 currentClickPos = new Vector2(mouseWorldPos.x, mouseWorldPos.y);
 
-                // If they clicked within 1.5 tiles AND it has been less than 3000ms (3 seconds)
                 if (currentTime - lastCommandTime < 3000 && lastCommandPos.dst(currentClickPos) < 1.5f) {
-                    return true; // Ignore the spam click, but consume the input
+                    return true;
                 }
 
-                // This is a valid, deliberate command. Update the trackers!
                 lastCommandTime = currentTime;
                 lastCommandPos.set(currentClickPos);
-                // -------------------------
 
                 Family family = Family.all(SelectableComponent.class, TransformComponent.class).get();
                 boolean unitIsSelected = false;
@@ -105,16 +101,12 @@ public class InputProcessor extends InputAdapter {
                 for (Entity entity : engine.getEntitiesFor(family)) {
                     if (entity.getComponent(SelectableComponent.class).selected) {
                         unitIsSelected = true;
-
-                        // Give the unit its marching orders!
                         TargetDestinationComponent destComp = engine.createComponent(TargetDestinationComponent.class);
-                        // Use the currentClickPos so we don't allocate more vectors
                         destComp.target.set(currentClickPos);
                         entity.add(destComp);
                     }
                 }
 
-                // If no units are selected, behave normally (pan camera)
                 if (!unitIsSelected) {
                     panning = true;
                     lastX = screenX;
@@ -129,20 +121,32 @@ public class InputProcessor extends InputAdapter {
                 if (canBuild) {
                     placeBuilding();
                 }
-                return true; // Consume input
+                return true;
             }
-            handleSelection();
+
+            // Start multi-selection drag
+            mouseWorldPos.set(screenX, screenY, 0);
+            camera.unproject(mouseWorldPos);
+            selectionStart.set(mouseWorldPos.x, mouseWorldPos.y);
+            selectionEnd.set(mouseWorldPos.x, mouseWorldPos.y);
+            multiSelecting = true;
             return true;
-            // Normal selection logic here (omitted for brevity)
         }
         return false;
     }
 
     @Override
     public boolean touchUp(int screenX, int screenY, int pointer, int button) {
-        if (button == 1) {
+        if (button == 1) { // Right Click
             panning = false;
             return true;
+        }
+        if (button == 0) { // Left Click
+            if (multiSelecting) {
+                executeSelection();
+                multiSelecting = false;
+                return true;
+            }
         }
         return false;
     }
@@ -161,6 +165,13 @@ public class InputProcessor extends InputAdapter {
             lastY = screenY;
             return true;
         }
+
+        if (multiSelecting) {
+            mouseWorldPos.set(screenX, screenY, 0);
+            camera.unproject(mouseWorldPos);
+            selectionEnd.set(mouseWorldPos.x, mouseWorldPos.y);
+            return true;
+        }
         return false;
     }
 
@@ -172,7 +183,6 @@ public class InputProcessor extends InputAdapter {
         return true;
     }
 
-    // Called every frame by GameScreen
     public void update(float delta) {
         if (placingMode) {
             updatePlacementLogic();
@@ -182,7 +192,6 @@ public class InputProcessor extends InputAdapter {
     private void updatePlacementLogic() {
         if (currentBlueprint == null || ghostEntity == null) return;
 
-        // 1. Get Mouse World Position
         mouseWorldPos.set(Gdx.input.getX(), Gdx.input.getY(), 0);
         camera.unproject(mouseWorldPos);
 
@@ -191,167 +200,165 @@ public class InputProcessor extends InputAdapter {
         float buildingWorldWidth = currentBlueprint.widthTiles * tileW;
         float buildingWorldHeight = currentBlueprint.heightTiles * tileH;
 
-        // 2. Calculate Center-Aligned Position
         float rawX = mouseWorldPos.x - (buildingWorldWidth / 2f);
         float rawY = mouseWorldPos.y - (buildingWorldHeight / 2f);
 
-        // 3. Snap to Grid
         int tileX = Math.round(rawX / tileW);
         int tileY = Math.round(rawY / tileH);
 
         float snappedX = tileX * tileW;
         float snappedY = tileY * tileH;
 
-        // 4. Check Validity using MapManager
         canBuild = mapManager.canPlaceBuilding(tileX, tileY, currentBlueprint.widthTiles, currentBlueprint.heightTiles);
 
-        // --- NEW: Update the Ghost Entity Components directly! ---
-
-        // Update its position and size
         TransformComponent transform = ghostEntity.getComponent(TransformComponent.class);
         transform.position.set(snappedX, snappedY);
         transform.width = buildingWorldWidth;
         transform.height = buildingWorldHeight;
 
-        // Update its color based on if it can be built
         SpriteComponent sprite = ghostEntity.getComponent(SpriteComponent.class);
         if (canBuild) {
-            sprite.color.set(0f, 1f, 0f, 0.5f); // Semi-transparent white
+            sprite.color.set(0f, 1f, 0f, 0.5f);
         } else {
-            sprite.color.set(1f, 0f, 0f, 0.5f); // Semi-transparent red
+            sprite.color.set(1f, 0f, 0f, 0.5f);
         }
     }
 
     private void placeBuilding() {
         if (!canBuild || currentBlueprint == null || ghostEntity == null) return;
 
-        // Read the final snapped position directly from our ghost entity!
         TransformComponent transform = ghostEntity.getComponent(TransformComponent.class);
 
-        System.out.println("Placing building at world: " + transform.position.x + ", " + transform.position.y);
-
-        // 1. Create real Entity
-
-        // 2. Delegate Map changes to MapManager
         Boolean buildingSuccess = mapManager.registerBuildingObstacle(transform.position.x, transform.position.y, transform.width, transform.height, currentBlueprint.widthTiles, currentBlueprint.heightTiles);
         if (buildingSuccess){
             EntityFactory.createBuilding(engine, transform.position.x, transform.position.y, transform.width, transform.height, currentBlueprint);
             cancelPlacement();
         }
-        // 3. Exit placement mode and destroy the ghost
-
     }
 
     private void attemptBuildingDeletion() {
-        // 1. Get current mouse world position
         mouseWorldPos.set(Gdx.input.getX(), Gdx.input.getY(), 0);
         camera.unproject(mouseWorldPos);
 
-        // 2. Get all buildings from the engine
         Family family = Family.all(BuildingComponent.class, TransformComponent.class).get();
         ImmutableArray<Entity> buildings = engine.getEntitiesFor(family);
 
-        // 3. Find if we are hovering over one
         for (Entity entity : buildings) {
             TransformComponent transform = entity.getComponent(TransformComponent.class);
 
-            // Simple AABB collision check point-to-box
             if (mouseWorldPos.x >= transform.position.x &&
                 mouseWorldPos.x <= transform.position.x + transform.width &&
                 mouseWorldPos.y >= transform.position.y &&
                 mouseWorldPos.y <= transform.position.y + transform.height) {
 
-                // We found the building under the mouse! Tag it for destruction.
                 entity.add(new DestroyedComponent());
                 System.out.println("Tagged building for deletion.");
-                break; // Only destroy one at a time
+                break;
             }
         }
     }
 
     public void beginPlacingBuilding(BuildingType type) {
-        // If we are already placing something else, destroy the old ghost first!
         if (placingMode && ghostEntity != null) {
             engine.removeEntity(ghostEntity);
         }
 
         this.currentBlueprint = type;
         this.placingMode = true;
-
-        // Ask the factory to spawn our new ECS ghost entity
         this.ghostEntity = EntityFactory.createGhostBuilding(engine, type);
     }
 
     private void cancelPlacement() {
         if (ghostEntity != null) {
-            engine.removeEntity(ghostEntity); // Remove the ghost from the game world
+            engine.removeEntity(ghostEntity);
             ghostEntity = null;
         }
         placingMode = false;
         currentBlueprint = null;
     }
 
-    private void handleSelection() {
-        // 1. Get Mouse World Position
-        mouseWorldPos.set(Gdx.input.getX(), Gdx.input.getY(), 0);
-        camera.unproject(mouseWorldPos);
+    private void executeSelection() {
+        // Calculate the bounding box of the drag
+        float minX = Math.min(selectionStart.x, selectionEnd.x);
+        float maxX = Math.max(selectionStart.x, selectionEnd.x);
+        float minY = Math.min(selectionStart.y, selectionEnd.y);
+        float maxY = Math.max(selectionStart.y, selectionEnd.y);
 
-        // 2. Ask Ashley for all selectable entities
+        // Account for small mouse jitters (treat as a single click)
+        boolean isSingleClick = (maxX - minX < 5f) && (maxY - minY < 5f);
+
+        // --- 1. CLEAR ALL CURRENT SELECTIONS ---
         Family family = Family.all(SelectableComponent.class, TransformComponent.class, SpriteComponent.class).get();
         ImmutableArray<Entity> selectables = engine.getEntitiesFor(family);
 
-        boolean clickedOnEntity = false;
-
-        // 3. Find if we clicked on any unit
         for (Entity entity : selectables) {
-            TransformComponent transform = entity.getComponent(TransformComponent.class);
             SelectableComponent selectable = entity.getComponent(SelectableComponent.class);
             SpriteComponent sprite = entity.getComponent(SpriteComponent.class);
-
-            // Simple AABB collision check
-            if (mouseWorldPos.x >= transform.position.x &&
-                mouseWorldPos.x <= transform.position.x + transform.width &&
-                mouseWorldPos.y >= transform.position.y &&
-                mouseWorldPos.y <= transform.position.y + transform.height) {
-
-                // We clicked the unit!
-                selectable.selected = true;
-                clickedOnEntity = true;
-
-                // Tint it blue as a temporary visual indicator
-                sprite.color.set(0.5f, 0.5f, 1f, 1f);
-                System.out.println("Unit Selected!");
-
-                // Optional: break here if you only want to select one unit at a time when clicking a cluster
-            } else {
-                // We didn't click this specific unit, deselect it
-                selectable.selected = false;
-                sprite.color.set(1f, 1f, 1f, 1f); // Reset tint
-            }
+            selectable.selected = false;
+            sprite.color.set(1f, 1f, 1f, 1f); // Reset color
         }
 
-        // 4. If we clicked empty ground, deselect everything
-        if (!clickedOnEntity) {
-            for (Entity entity : selectables) {
-                entity.getComponent(SelectableComponent.class).selected = false;
-                entity.getComponent(SpriteComponent.class).color.set(1f, 1f, 1f, 1f); // Reset tint
-            }
-            System.out.println("Deselected all.");
-        }
-    }
+        // --- 2. FIND GRID CELLS (WITH A 1-CELL BUFFER FOR NEIGHBORS) ---
+        SpatialPartitionGrid grid = mapManager.spatialGrid;
 
-    // Getters for GameScreen rendering
+        // By subtracting/adding 1, we grab the cells we overlap PLUS the immediate neighbors
+        int startCellX = grid.getCellX(minX) - 1;
+        int startCellY = grid.getCellY(minY) - 1;
+        int endCellX = grid.getCellX(maxX) + 1;
+        int endCellY = grid.getCellY(maxY) + 1;
+
+        // --- 3. QUERY THE EXPANDED AREA ---
+        for (int cx = startCellX; cx <= endCellX; cx++) {
+            for (int cy = startCellY; cy <= endCellY; cy++) {
+
+                // getCellAt handles out-of-bounds checks for us and returns null if invalid
+                SpatialPartitionGrid.SpatialCell cell = grid.getCellAt(cx * grid.getCellWidth(), cy * grid.getCellHeight());
+
+                if (cell != null) {
+                    for (Entity entity : cell.entities) {
+
+                        SelectableComponent selectable = entity.getComponent(SelectableComponent.class);
+                        if (selectable == null) continue;
+
+                        TransformComponent transform = entity.getComponent(TransformComponent.class);
+                        SpriteComponent sprite = entity.getComponent(SpriteComponent.class);
+
+                        float entityMinX = transform.position.x;
+                        float entityMaxX = transform.position.x + transform.width;
+                        float entityMinY = transform.position.y;
+                        float entityMaxY = transform.position.y + transform.height;
+
+                        boolean inBounds = false;
+
+                        if (isSingleClick) {
+                            // Point Collision (Did we click inside the unit?)
+                            if (selectionStart.x >= entityMinX && selectionStart.x <= entityMaxX &&
+                                selectionStart.y >= entityMinY && selectionStart.y <= entityMaxY) {
+                                inBounds = true;
+                            }
+                        } else {
+                            // AABB Overlap (Did the box touch the unit's bounds?)
+                            if (minX < entityMaxX && maxX > entityMinX &&
+                                minY < entityMaxY && maxY > entityMinY) {
+                                inBounds = true;
+                            }
+                        }
+
+                        if (inBounds) {
+                            selectable.selected = true;
+                            sprite.color.set(0.5f, 0.5f, 1f, 1f); // Tint blue
+                        }
+                    }
+                }
+            }
+        }
+    }    // Getters
     public boolean isPlacingMode() { return placingMode; }
     public boolean isCanBuild() { return canBuild; }
     public Vector2 getGhostPos() { return ghostPos; }
-    public float getGhostWidth() {
-        return currentBlueprint != null ? currentBlueprint.widthTiles * mapManager.getTileWidth() : 0;
-    }
-    public float getGhostHeight() {
-        return currentBlueprint != null ? currentBlueprint.heightTiles * mapManager.getTileHeight() : 0;
-    }
+    public BuildingType getCurrentBlueprint() { return currentBlueprint; }
 
-    public BuildingType getCurrentBlueprint() {
-        return currentBlueprint;
-    }
+    public boolean isMultiSelecting() { return multiSelecting; }
+    public Vector2 getSelectionStart() { return selectionStart; }
+    public Vector2 getSelectionEnd() { return selectionEnd; }
 }
